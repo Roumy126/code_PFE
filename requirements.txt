@@ -1,0 +1,10 @@
+numpy
+qiskit
+qiskit-aer
+matplotlib
+joblib
+scipy
+networkx
+python-louvain
+scikit-learn
+ipykernel
