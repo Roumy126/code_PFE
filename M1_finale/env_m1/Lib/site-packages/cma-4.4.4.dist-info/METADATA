@@ -1,0 +1,219 @@
+Metadata-Version: 2.4
+Name: cma
+Version: 4.4.4
+Summary: CMA-ES, Covariance Matrix Adaptation Evolution Strategy for non-linear numerical optimization in Python
+Author: Nikolaus Hansen, Youhei Akimoto, Petr Baudis
+Maintainer-email: Nikolaus Hansen <authors_firstname.lastname@inria.fr>
+License-Expression: BSD-3-Clause
+Project-URL: Homepage, https://github.com/CMA-ES/pycma
+Project-URL: Repository, https://github.com/CMA-ES/pycma.git
+Project-URL: Bug Tracker, https://github.com/CMA-ES/pycma/issues
+Keywords: optimization,CMA-ES,cmaes
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Console
+Classifier: Framework :: IPython
+Classifier: Framework :: Jupyter
+Classifier: Intended Audience :: Education
+Classifier: Intended Audience :: Other Audience
+Classifier: Intended Audience :: Science/Research
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 2.7
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Scientific/Engineering
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: Scientific/Engineering :: Mathematics
+Description-Content-Type: text/x-rst
+License-File: LICENSE
+Requires-Dist: numpy
+Provides-Extra: plotting
+Requires-Dist: matplotlib; extra == "plotting"
+Provides-Extra: constrained-solution-tracking
+Requires-Dist: moarchiving; extra == "constrained-solution-tracking"
+Provides-Extra: statistical-tests
+Requires-Dist: scipy; extra == "statistical-tests"
+Dynamic: license-file
+
+CMA-ES Covariance Matrix Adaptation Evolution Strategy
+======================================================
+
+The CMA-ES is a randomized derivative-free numerical optimization algorithm for
+difficult (non-convex, ill-conditioned, multi-modal, rugged, noisy) optimization
+problems in continuous or mixed-integer search spaces, implemented in Python.
+
+The typical domain of application are objective functions with:
+
+* search space dimension between five and a few hundred,
+* dependent decision variables (non-separable)
+* gradients not being available or useful,
+* at least, say, 100 times dimension function evaluations possible and
+  needed to get a satisfactory solution,
+* ill-conditioned or rugged or multi-modal landscapes.
+
+The handling of
+
+* bound constraints via the ``'bounds' = [lower, upper]`` option or the
+  `cma.BoundDomainTransform` wrapper
+* linear and nonlinear constraints via the ``constraints`` argument to `fmin2`
+  or `fmin_con2`
+* noise via ``noise_handler=True`` as argument to `fmin2`
+* integer variables for mixed-integer problems via the
+  ``'integer_variables'=index_list`` option
+
+is available too. The CMA-ES is quite reliable, however for small budgets
+(fewer function evaluations than 100 times dimension) or in very small
+dimensions faster methods are available.
+
+The ``pycma`` module provides two independent implementations of the CMA-ES
+algorithm in the classes `cma.CMAEvolutionStrategy`_ and a basic implementation
+`cma.purecma.CMAES`_.
+
+Installation
+------------
+In the terminal command line type ::
+
+      python -m pip install cma
+
+The package will be downloaded and installed automatically. To **upgrade**
+an existing installation, '``install``' must be replaced by '``install -U``'. For
+the documentation of ``pip``, `see here`_.
+
+.. _`see here`: http://www.pip-installer.org
+
+Alternatively, download and unpack the ``cma-...tar.gz`` file under the
+above ``Download files link``. The folder ``cma`` from the ``tar`` archive
+can be used without any installation (for ``import`` to find it, it must be
+in the current folder or the Python search paths) or can be installed by
+``pip install -e .``.
+
+Usage Example
+-------------
+In a Python shell:
+
+.. code-block:: python
+
+    >>> import cma
+    >>> help(cma)
+        <output omitted>
+    >>> es = cma.CMAEvolutionStrategy(8 * [0], 0.5)
+    (5_w,10)-aCMA-ES (mu_w=3.2,w_1=45%) in dimension 8 (seed=468976, Tue May  6 19:14:06 2014)
+    >>> help(es)  # the same as help(cma.CMAEvolutionStrategy)
+        <output omitted>
+    >>> es.optimize(cma.ff.rosen)
+    Iterat #Fevals   function value    axis ratio  sigma  minstd maxstd min:sec
+        1      10 1.042661803766204e+02 1.0e+00 4.50e-01  4e-01  5e-01 0:0.0
+        2      20 7.322331708590002e+01 1.2e+00 3.89e-01  4e-01  4e-01 0:0.0
+        3      30 6.048150359372417e+01 1.2e+00 3.47e-01  3e-01  3e-01 0:0.0
+      100    1000 3.165939452385367e+00 1.1e+01 7.08e-02  2e-02  7e-02 0:0.2
+      200    2000 4.157333035296804e-01 1.9e+01 8.10e-02  9e-03  5e-02 0:0.4
+      300    3000 2.413696640005903e-04 4.3e+01 9.57e-03  3e-04  7e-03 0:0.5
+      400    4000 1.271582136805314e-11 7.6e+01 9.70e-06  8e-08  3e-06 0:0.7
+      439    4390 1.062554035878040e-14 9.4e+01 5.31e-07  3e-09  8e-08 0:0.8
+    >>> es.result_pretty()  # pretty print result
+    termination on tolfun=1e-11
+    final/bestever f-value = 3.729752e-15 3.729752e-15
+    mean solution: [ 1.          1.          1.          1.          0.99999999  0.99999998
+      0.99999995  0.99999991]
+    std deviation: [  2.84303359e-09   2.74700402e-09   3.28154576e-09   5.92961588e-09
+       1.07700123e-08   2.12590385e-08   4.09374304e-08   8.16649754e-08]
+
+optimizes the 8-dimensional Rosenbrock function with initial solution all
+zeros and initial ``sigma = 0.5``.
+
+Pretty much the same can be achieved with the "one-liner"
+
+.. code-block:: python
+
+    >>> import cma
+    >>> xopt, es = cma.fmin2(cma.ff.rosen, 8 * [0], 0.5)
+        <output omitted>
+
+where `cma.fmin2`_ provides also options for restarts.
+
+The same can be run via the **ask-and-tell interface** which gives the user direct
+control over the iteration loop of the algorithm:
+
+.. code-block:: python
+
+    >>> import cma
+    >>> es = cma.CMAEvolutionStrategy(12 * [0], 0.5)
+    >>> while not es.stop():
+    ...     solutions = es.ask()
+    ...     es.tell(solutions, [cma.ff.rosen(x) for x in solutions])
+    ...     es.logger.add()  # write data to disc to be plotted
+    ...     es.disp()
+        <output omitted>
+    >>> es.result_pretty()
+        <output omitted>
+    >>> cma.plot()  # shortcut for es.logger.plot()
+
+.. figure:: http://www.cmap.polytechnique.fr/~nikolaus.hansen/rosen12.png
+    :alt: CMA-ES on Rosenbrock function in dimension 8
+    :target: https://cma-es.github.io/cmaes_sourcecode_page.html#example
+    :align: center 
+   
+    A single run on the 12-dimensional Rosenbrock function. 
+
+
+The `CMAOptions`_ class manages the options for `CMAEvolutionStrategy`_.
+The options class allows for substring search.
+For example, verbosity options can be found like
+
+
+.. code-block:: python
+
+    >>> import cma
+    >>> cma.s.pprint(cma.CMAOptions('erb'))
+    {'verb_log': '1  #v verbosity: write data to files every verb_log iteration, writing can be time critical on fast to evaluate functions'
+     'verbose': '1  #v verbosity e.v. of initial/final message, -1 is very quiet, not yet implemented'
+     'verb_plot': '0  #v in fmin(): plot() is called every verb_plot iteration'
+     'verb_disp': '100  #v verbosity: display console output every verb_disp iteration'
+     'verb_filenameprefix': 'outcmaes  # output filenames prefix'
+     'verb_append': '0  # initial evaluation counter, if append, do not overwrite output files'
+     'verb_time': 'True  #v output timings on console'}
+
+Options are passed as another argument, after ``sigma``, to `cma.fmin2`_ or
+`cma.CMAEvolutionStrategy`_ like
+
+.. code-block:: python
+
+    >>> import cma
+    >>> es = cma.CMAEvolutionStrategy(8 * [0], 0.5,
+                                      {'verb_disp': 1}) # display each iteration
+
+.. _`cma.CMAEvolutionStrategy`: https://cma-es.github.io/apidocs-pycma/cma.evolution_strategy.CMAEvolutionStrategy.html
+.. _`cma.purecma.CMAES`: https://cma-es.github.io/apidocs-pycma/cma.purecma.CMAES.html
+.. _`CMAOptions`: https://cma-es.github.io/apidocs-pycma/cma.options_parameters.CMAOptions.html
+.. _`CMAEvolutionStrategy`: https://cma-es.github.io/apidocs-pycma/cma.evolution_strategy.CMAEvolutionStrategy.html
+.. _`cma.fmin2`: https://cma-es.github.io/apidocs-pycma/cma.evolution_strategy.html#fmin2
+
+Documentations
+--------------
+The full package API documentation:
+
+* `current`_
+* `version 1.x`_
+
+.. _`current`: https://cma-es.github.io/apidocs-pycma/
+.. _`version 1.x`: http://www.cmap.polytechnique.fr/~nikolaus.hansen/html-pythoncma/
+
+See also
+
+* `Links to more documentation`_
+* An `FAQ`_ (under development)
+* `General CMA-ES source code page`_ with practical hints
+* `CMA-ES on Wikipedia`_
+
+.. _`Links to more documentation`: https://github.com/CMA-ES/pycma/tree/development?tab=readme-ov-file#documentation-and-getting-started-links
+.. _`FAQ`: https://github.com/CMA-ES/pycma/issues?q=is:issue+label:FAQ
+.. _`General CMA-ES source code page`: https://cma-es.github.io/cmaes_sourcecode_page.html
+.. _`CMA-ES on Wikipedia`: http://en.wikipedia.org/wiki/CMA-ES
+
+Dependencies
+------------
+
+* required (unless for `cma.purecma`): ``numpy`` -- array processing for numbers, strings, records, and objects
+* optional (highly recommended): ``matplotlib`` -- Python plotting package (includes ``pylab``)
+
+Use ``pip install numpy`` etc. for installation. The `cma.purecma` submodule can be used without any dependencies installed.
+
+License: BSD-3-Clause

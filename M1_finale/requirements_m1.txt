@@ -1,0 +1,14 @@
+qiskit
+qiskit-aer
+deap
+networkx
+python-louvain
+scikit-learn
+matplotlib
+joblib
+pandas
+scipy
+pymoo
+ipykernel
+nbconvert
+pylatexenc
