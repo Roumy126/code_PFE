@@ -1,33 +1,33 @@
-# Optimisation de Circuits Quantiques avec Algorithme Génétique
+# Quantum Circuit Optimization with a Genetic Algorithm
 
 ## Description
-Ce projet implémente un algorithme génétique pour l'optimisation et l'approximation de circuits quantiques. L'objectif principal est d'utiliser des techniques évolutives pour générer des circuits quantiques qui s'approchent au mieux d'une matrice unitaire cible ou pour optimiser les paramètres de circuits existants.
+This project implements a genetic algorithm for optimizing and approximating quantum circuits. The main goal is to use evolutionary techniques to generate quantum circuits that best approximate a target unitary matrix, or to optimize the parameters of existing circuits.
 
-Le projet utilise **Qiskit** pour la manipulation et la simulation des circuits quantiques, ainsi que des outils de calcul scientifique comme **NumPy** et **SciPy**.
+The project uses **Qiskit** to build and simulate quantum circuits, along with scientific computing tools such as **NumPy** and **SciPy**.
 
 ## Installation
 
-Pour installer les dépendances nécessaires, assurez-vous d'avoir Python installé, puis exécutez la commande suivante :
+To install the required dependencies, make sure Python is installed, then run:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Utilisation
+## Usage
 
-Le projet est principalement structuré autour de notebooks Jupyter. Pour explorer et exécuter le code :
+The project is mainly organized around Jupyter notebooks. To explore and run the code:
 
-1. Lancez Jupyter Notebook ou JupyterLab :
+1. Launch Jupyter Notebook or JupyterLab:
    ```bash
    jupyter notebook
    ```
-2. Ouvrez l'un des notebooks principaux, par exemple :
-   - `AG_mono/code_ag.ipynb` : Algorithme génétique mono-objectif.
-   - `NSGA-II/AG_multi_objectifs_VF.ipynb` : Algorithme génétique multi-objectifs (NSGA-II).
-   - `final_test_AG/code_travaille copy 3.ipynb` : Tests finaux de l'algorithme d'optimisation.
+2. Open one of the main notebooks, for example:
+   - `AG_mono/code_ag.ipynb`: Mono-objective genetic algorithm.
+   - `NSGA-II/AG_multi_objectifs_VF.ipynb`: Multi-objective genetic algorithm (NSGA-II).
+   - `final_test_AG/code_travaille copy 3.ipynb`: Final tests of the optimization algorithm.
 
-## Structure du Projet
-- `AG_mono/` : Implémentations mono-objectif.
-- `NSGA-II/` : Implémentations multi-objectifs.
-- `Final_test/` & `final_test_AG/` : Scripts de validation et tests de performance.
-- `m1*/`, `m2*/` : Modules de test pour différents types de blocs de circuits.
+## Project Structure
+- `AG_mono/`: Mono-objective implementations.
+- `NSGA-II/`: Multi-objective implementations.
+- `Final_test/` & `final_test_AG/`: Validation scripts and performance tests.
+- `m1*/`, `m2*/`: Test modules for different types of circuit blocks.

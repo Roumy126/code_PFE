@@ -25,8 +25,8 @@ import pandas as pd
 def random_weakly_connected_circuit(
     n_qubits: int = 40,
     depth: int = 20,
-    twoq_gates_total: int = 10,   # TRÈS faible nombre de 2-qubits au total
-    connectivity_edges: int = 6,  # TRÈS faible connectivité (peu d'arêtes possibles)
+    twoq_gates_total: int = 10,   # VERY low number of 2-qubit gates in total
+    connectivity_edges: int = 6,  # VERY low connectivity (few possible edges)
     use_cz: bool = True,
     seed: int = 1234
 ) -> QuantumCircuit:
@@ -80,7 +80,7 @@ def random_weakly_connected_circuit(
     return qc
 
 # --- Extraction logic from final_m1.ipynb ---
-# Instead of copy-pasting everything, I will use nbconvert to execute the notebook 
+# Instead of copy-pasting everything, I will use nbconvert to execute the notebook
 
 if __name__ == "__main__":
     # Create the circuit
@@ -92,7 +92,7 @@ if __name__ == "__main__":
         use_cz=True,
         seed=42
     )
-    print("Circuit généré (30 qubits, faible connectivité) :")
+    print("Generated circuit (30 qubits, low connectivity):")
     print(qc.draw())
     
 

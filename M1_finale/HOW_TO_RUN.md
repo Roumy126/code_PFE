@@ -1,121 +1,120 @@
-# 📘 HOW TO RUN — Dossier `M1_finale`
+# 📘 HOW TO RUN — `M1_finale` folder
 
-Guide complet pour installer l'environnement et exécuter tous les scripts du dossier.
+Complete guide to set up the environment and run all the scripts in this folder.
 
 ---
 
-## 🗂️ Structure du dossier
+## 🗂️ Folder structure
 
 ```
 M1_finale/
-├── final_m1.ipynb          ← Notebook principal (pipeline complet)
-├── final_m1_script.py      ← Version script du notebook (sans Jupyter)
-├── run_m1_test.py          ← Script de test (circuit 30 qubits)
-├── circuit_64qubits.py     ← ⭐ Nouveau : circuit faiblement connecté 64 qubits
-├── setup_env.ps1           ← Script PowerShell de création de l'environnement
-├── requirements_m1.txt     ← Liste des dépendances Python
-├── HOW_TO_RUN.md           ← Ce fichier
-└── out_figs/               ← Dossier de sortie des figures générées
+├── final_m1.ipynb          ← Main notebook (complete pipeline)
+├── final_m1_script.py      ← Script version of the notebook (no Jupyter)
+├── run_m1_test.py          ← Test script (30-qubit circuit)
+├── circuit_64qubits.py     ← ⭐ New: weakly connected 64-qubit circuit
+├── setup_env.ps1           ← PowerShell script to create the environment
+├── requirements_m1.txt     ← List of Python dependencies
+├── HOW_TO_RUN.md           ← This file
+└── out_figs/               ← Output folder for generated figures
 ```
 
 ---
 
-## ⚙️ 1. Prérequis
+## ⚙️ 1. Prerequisites
 
-| Outil | Version recommandée |
+| Tool | Recommended version |
 |-------|---------------------|
 | Python | **≥ 3.10** |
-| pip | dernière version |
+| pip | latest version |
 
 ---
 
-## 🚀 2. Installation de l'environnement (une seule fois)
+## 🚀 2. Installing the environment (one time only)
 
-Ouvrez **PowerShell** dans le dossier `M1_finale`, puis exécutez :
+Open **PowerShell** in the `M1_finale` folder, then run:
 
 ```powershell
-# Autoriser l'exécution de scripts (si nécessaire)
+# Allow script execution (if needed)
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
-# Lancer le script d'installation
+# Run the installation script
 .\setup_env.ps1
 ```
 
-Ce script :
-1. Crée un environnement virtuel `env_m1/`
-2. Met à jour `pip`
-3. Installe toutes les dépendances de `requirements_m1.txt`
+This script:
+1. Creates a virtual environment `env_m1/`
+2. Updates `pip`
+3. Installs all dependencies from `requirements_m1.txt`
 
 ---
 
-## ▶️ 3. Activation de l'environnement (à chaque session)
+## ▶️ 3. Activating the environment (every session)
 
 ```powershell
 .\env_m1\Scripts\Activate.ps1
 ```
 
-Votre terminal affichera `(env_m1)` pour confirmer l'activation.
+Your terminal will show `(env_m1)` to confirm the activation.
 
 ---
 
-## 🔬 4. Exécuter les scripts
+## 🔬 4. Running the scripts
 
-### 4.1 — Notebook complet (Jupyter)
-Lance le pipeline d'optimisation complet avec visualisations interactives.
+### 4.1 — Full notebook (Jupyter)
+Runs the complete optimization pipeline with interactive visualizations.
 
 ```powershell
 jupyter notebook final_m1.ipynb
 ```
 
-### 4.2 — Script principal (sans Jupyter)
-Version Python pure du notebook, identique en logique.
+### 4.2 — Main script (without Jupyter)
+Pure Python version of the notebook, identical in logic.
 
 ```powershell
 python final_m1_script.py
 ```
 
-### 4.3 — Test rapide (circuit 30 qubits)
+### 4.3 — Quick test (30-qubit circuit)
 
 ```powershell
 python run_m1_test.py
 ```
 
-### 4.4 — ⭐ Nouveau : Circuit faiblement connecté 64 qubits
+### 4.4 — ⭐ New: Weakly connected 64-qubit circuit
 
 ```powershell
 python circuit_64qubits.py
 ```
 
-**Ce que fait ce script :**
-- Génère un circuit quantique **aléatoire à 64 qubits** avec une **très faible connectivité** :
-  - Profondeur : 24 couches
-  - Portes à 2 qubits : seulement 12 au total
-  - Arêtes de connectivité : seulement 8 (sur 2016 possibles)
-- Affiche les statistiques du circuit (taille, profondeur, portes 2-qubits)
-- Sauvegarde le dessin du circuit → `out_figs/circuit_64q_original.png`
-- Tente de lancer le pipeline d'optimisation via `final_m1_script.py`
+**What this script does:**
+- Generates a **random 64-qubit** quantum circuit with **very low connectivity**:
+  - Depth: 24 layers
+  - 2-qubit gates: only 12 in total
+  - Connectivity edges: only 8 (out of 2016 possible)
+- Displays circuit statistics (size, depth, 2-qubit gates)
+- Saves the circuit drawing → `out_figs/circuit_64q_original.png`
+- Attempts to launch the optimization pipeline via `final_m1_script.py`
 
-**Paramètres modifiables** (en haut de `circuit_64qubits.py`) :
+**Adjustable parameters** (at the top of `circuit_64qubits.py`):
 
-| Paramètre | Valeur par défaut | Description |
+| Parameter | Default value | Description |
 |-----------|-------------------|-------------|
-| `n_qubits` | 64 | Nombre de qubits |
-| `depth` | 24 | Profondeur du circuit |
-| `twoq_gates_total` | 12 | Nombre de portes 2-qubits |
-| `connectivity_edges` | 8 | Nombre d'arêtes de topologie |
+| `n_qubits` | 64 | Number of qubits |
+| `depth` | 24 | Circuit depth |
+| `twoq_gates_total` | 12 | Number of 2-qubit gates |
+| `connectivity_edges` | 8 | Number of topology edges |
 | `use_cz` | `True` | `True` = CZ, `False` = CNOT |
-| `seed` | 2024 | Graine aléatoire (reproductibilité) |
+| `seed` | 2024 | Random seed (reproducibility) |
 
 ---
 
-## 🖼️ 5. Résultats et figures
+## 🖼️ 5. Results and figures
 
-Toutes les figures générées sont sauvegardées dans le dossier `out_figs/` :
+All generated figures are saved in the `out_figs/` folder:
 
-| Fichier | Généré par |
+| File | Generated by |
 |--------|------------|
 | `circuit_original.png` | `final_m1_script.py` |
 | `circuit_64q_original.png` | `circuit_64qubits.py` |
-| `block_X_circuit_original.png` | pipeline d'optimisation |
-| `optimized_block_X_circuit.png` | pipeline d'optimisation |
-
+| `block_X_circuit_original.png` | optimization pipeline |
+| `optimized_block_X_circuit.png` | optimization pipeline |

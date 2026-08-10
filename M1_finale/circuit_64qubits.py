@@ -1,14 +1,14 @@
 """
 circuit_64qubits.py
 ====================
-Génère un circuit quantique FAIBLEMENT CONNECTÉ à 64 qubits,
-puis lance le pipeline d'optimisation de final_m1_script.py sur ce circuit.
+Generates a WEAKLY CONNECTED quantum circuit with 64 qubits,
+then launches the optimization pipeline from final_m1_script.py on this circuit.
 
-Paramètres du circuit (faible connectivité) :
+Circuit parameters (low connectivity):
   - n_qubits          : 64
-  - depth             : 24   (profondeur modérée)
-  - twoq_gates_total  : 12   (très peu de portes à 2 qubits)
-  - connectivity_edges: 8    (très peu de liaisons possibles entre qubits)
+  - depth             : 24   (moderate depth)
+  - twoq_gates_total  : 12   (very few 2-qubit gates)
+  - connectivity_edges: 8    (very few possible links between qubits)
   - seed              : 2024
 """
 
@@ -18,41 +18,41 @@ import numpy as np
 from qiskit import QuantumCircuit
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. Générateur de circuit faiblement connecté – 64 qubits
+# 1. Weakly connected circuit generator – 64 qubits
 # ──────────────────────────────────────────────────────────────────────────────
 
 def weakly_connected_circuit_64q(
     n_qubits: int = 64,
     depth: int = 24,
-    twoq_gates_total: int = 12,   # très faible : peu de portes 2-qubits
-    connectivity_edges: int = 8,  # très faible : peu d'arêtes possibles
+    twoq_gates_total: int = 12,   # very low: few 2-qubit gates
+    connectivity_edges: int = 8,  # very low: few possible edges
     use_cz: bool = True,
     seed: int = 2024,
 ) -> QuantumCircuit:
     """
-    Crée un circuit quantique aléatoire à `n_qubits` qubits avec une
-    connectivité TRÈS FAIBLE entre les qubits (faible nombre d'arêtes
-    autorisées et faible nombre total de portes à 2 qubits).
+    Creates a random quantum circuit with `n_qubits` qubits with VERY LOW
+    connectivity between qubits (small number of allowed edges and small
+    total number of 2-qubit gates).
 
-    Paramètres
+    Parameters
     ----------
-    n_qubits          : nombre de qubits (défaut 64)
-    depth             : nombre de couches / profondeur du circuit
-    twoq_gates_total  : nombre total de portes à 2 qubits placées aléatoirement
-    connectivity_edges: nombre maximum d'arêtes décrivant la topologie
-    use_cz            : si True → CZ, sinon CNOT
-    seed              : graine pour la reproductibilité
+    n_qubits          : number of qubits (default 64)
+    depth             : number of layers / circuit depth
+    twoq_gates_total  : total number of randomly placed 2-qubit gates
+    connectivity_edges: maximum number of edges describing the topology
+    use_cz            : if True -> CZ, otherwise CNOT
+    seed              : seed for reproducibility
 
-    Retourne
-    --------
-    QuantumCircuit Qiskit
+    Returns
+    -------
+    Qiskit QuantumCircuit
     """
     rng = random.Random(seed)
     np_rng = np.random.default_rng(seed)
 
     qc = QuantumCircuit(n_qubits, name="weak_64q")
 
-    # ── Construction de la topologie (arêtes autorisées) ──────────────────────
+    # ── Building the topology (allowed edges) ──────────────────────
     edges: set = set()
     attempts = 0
     while len(edges) < connectivity_edges and attempts < 20_000:
@@ -63,23 +63,23 @@ def weakly_connected_circuit_64q(
         attempts += 1
 
     if not edges:
-        edges = {(0, 1)}          # au moins une arête garantie
+        edges = {(0, 1)}          # at least one edge guaranteed
     edges = sorted(edges)
 
-    # ── Layers où une porte 2-qubits sera insérée ─────────────────────────────
+    # ── Layers where a 2-qubit gate will be inserted ─────────────────────────────
     twoq_layers = set(rng.sample(range(depth), k=min(twoq_gates_total, depth)))
 
     oneq_paulis = ["x", "y", "z"]
     oneq_rots   = ["rx", "ry", "rz"]
 
-    # ── Couches du circuit ─────────────────────────────────────────────────────
+    # ── Circuit layers ─────────────────────────────────────────────────────
     for d in range(depth):
-        # On touche un sous-ensemble de qubits (faible densité 1/8)
+        # Touch a subset of qubits (low density 1/8)
         k = max(8, n_qubits // 8)
         touched = rng.sample(range(n_qubits), k=k)
 
         for q in touched:
-            if rng.random() < 0.75:          # porte de rotation (continue)
+            if rng.random() < 0.75:          # rotation gate (continuous)
                 kind  = rng.choice(oneq_rots)
                 theta = float(np_rng.uniform(0, 2 * np.pi))
                 if kind == "rx":
@@ -88,7 +88,7 @@ def weakly_connected_circuit_64q(
                     qc.ry(theta, q)
                 else:
                     qc.rz(theta, q)
-            else:                            # porte de Pauli (discrète)
+            else:                            # Pauli gate (discrete)
                 kind = rng.choice(oneq_paulis)
                 if kind == "x":
                     qc.x(q)
@@ -110,20 +110,20 @@ def weakly_connected_circuit_64q(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. Point d'entrée principal
+# 2. Main entry point
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import os, sys
     import matplotlib
-    matplotlib.use("Agg")          # pas d'affichage graphique (mode serveur)
+    matplotlib.use("Agg")          # no graphical display (server mode)
     import matplotlib.pyplot as plt
 
     print("=" * 60)
-    print("  Circuit faiblement connecté – 64 qubits")
+    print("  Weakly connected circuit – 64 qubits")
     print("=" * 60)
 
-    # ── Génération du circuit ──────────────────────────────────────────────────
+    # ── Circuit generation ──────────────────────────────────────────────────
     qc = weakly_connected_circuit_64q(
         n_qubits=64,
         depth=24,
@@ -134,36 +134,36 @@ if __name__ == "__main__":
     )
 
     print(f"\n  Qubits           : {qc.num_qubits}")
-    print(f"  Portes totales   : {qc.size()}")
-    print(f"  Profondeur       : {qc.depth()}")
-    print(f"  Portes 2-qubits  : {qc.num_nonlocal_gates()}")
+    print(f"  Total gates      : {qc.size()}")
+    print(f"  Depth            : {qc.depth()}")
+    print(f"  2-qubit gates    : {qc.num_nonlocal_gates()}")
 
-    # ── Sauvegarde du dessin du circuit ──────────────────────────────────────
+    # ── Saving the circuit drawing ──────────────────────────────────────
     os.makedirs("out_figs", exist_ok=True)
     fig = qc.draw("mpl", fold=40)
     fig.savefig("out_figs/circuit_64q_original.png", dpi=80, bbox_inches="tight")
     plt.close(fig)
-    print("\n  Dessin sauvegardé → out_figs/circuit_64q_original.png")
+    print("\n  Drawing saved -> out_figs/circuit_64q_original.png")
 
-    # ── Lancement de l'optimisation via final_m1_script ──────────────────────
-    print("\n  Lancement du pipeline d'optimisation (final_m1_script.py)...")
-    print("  (importation du module – cela peut prendre quelques secondes)\n")
+    # ── Launching optimization via final_m1_script ──────────────────────
+    print("\n  Launching the optimization pipeline (final_m1_script.py)...")
+    print("  (importing the module - this may take a few seconds)\n")
 
     try:
         import final_m1_script as m1
 
-        # Utilise la fonction principale d'optimisation si elle existe
+        # Use the main optimization function if it exists
         if hasattr(m1, "run_optimization_pipeline"):
             result = m1.run_optimization_pipeline(qc)
-            print("\n  Résultat de l'optimisation :", result)
+            print("\n  Optimization result:", result)
         elif hasattr(m1, "optimize_circuit"):
             result = m1.optimize_circuit(qc)
-            print("\n  Circuit optimisé obtenu.")
+            print("\n  Optimized circuit obtained.")
         else:
-            print("  INFO : aucune fonction d'optimisation trouvée dans")
-            print("         final_m1_script.py – circuit généré avec succès.")
+            print("  INFO: no optimization function found in")
+            print("         final_m1_script.py - circuit generated successfully.")
     except Exception as exc:
-        print(f"\n  AVERTISSEMENT : impossible d'importer final_m1_script : {exc}")
-        print("  Le circuit a quand même été généré et sauvegardé.")
+        print(f"\n  WARNING: unable to import final_m1_script: {exc}")
+        print("  The circuit was still generated and saved.")
 
-    print("\n  Terminé.\n")
+    print("\n  Done.\n")
