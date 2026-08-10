@@ -8,3 +8,6 @@ networkx
 python-louvain
 scikit-learn
 ipykernel
+deap
+pandas
+pymoo
