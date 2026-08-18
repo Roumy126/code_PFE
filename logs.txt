@@ -346,3 +346,96 @@ Suggested priority given effort vs payoff for the thesis:
   — but requires picking/simulating a device noise model) >
   #6 (biggest potential compression win, but pulls in an external
   RL+ZX-calculus dependency chain, best as a stretch goal).
+
+=====================================================================
+NEXT STEPS — REPOSITORY SETUP ROADMAP FOR A DECEMBER JOURNAL SUBMISSION
+=====================================================================
+Goal: laptop-only compute, ~4 months (from 2026-08-18) to produce
+simulation results for a scientific journal. This roadmap is about
+repo/engineering setup to make that achievable, not about which
+research contribution to pursue (that's a separate, still-open
+decision — see the MOO-algorithm and related-work sections above for
+candidate angles).
+
+Problems this addresses:
+1. No shared code — every notebook redefines its own version of the
+   same functions, so nothing guarantees two experiments ran the same
+   code (a reproducibility problem reviewers will flag).
+2. No experiment runner / structured output — results lived as PNGs
+   in out_figs/ and stdout prints; a paper needs tables/figures built
+   from many runs across seeds/algorithms/circuit sizes, which needs
+   structured, aggregable data.
+3. No smoke tests — on a laptop-only budget, multi-hour/overnight
+   runs are precious; a silent bug found after an 8-hour run is a full
+   day lost.
+
+Phase 0 — foundation (~1-2 weeks) — DONE (2026-08-18, commit 35ed672d)
+  Implemented:
+  - M1_finale/__init__.py: the pipeline is now importable as a module
+    (from M1_finale.final_m1_script import ...) instead of only
+    runnable as a top-level script.
+  - run_experiment.py: CLI runner. Takes circuit config + algorithm
+    config + --seed, runs optimise_circuit_pipeline once, and writes
+    an isolated runs/<run_id>/ directory containing config.json,
+    metrics.json (numpy/set-safe JSON), and final_circuit.qpy (so the
+    optimized circuit itself can be reloaded later, not just its
+    metrics) -- instead of overwriting loose PNGs/stdout in the cwd.
+  - optimise_circuit_pipeline: generations/pop_size were hardcoded
+    (500/400) inside the block-optimization call; now exposed as real
+    parameters so a CLI/smoke test can override them.
+  - stochastic_injection: was using an *unseeded* random.Random() --
+    meaning any run using the default injection_method="stochastic"
+    was never actually reproducible regardless of any outer seeding.
+    Now takes a seed param, wired to the pipeline's existing sa_seed.
+  - Bug fix: optimise_block_nsga2 crashed (IndexError) whenever
+    Louvain produced a singleton (1-qubit) block, because its gate
+    pool always included 2-qubit gates (cx/cz/rzz) with no second
+    qubit available to target. Now 2-qubit gates are excluded from
+    the pool when the block has < 2 qubits. This is a real, latent
+    bug that a laptop-scale sweep would have hit often (small/weakly
+    connected circuits partition into many singleton blocks) --
+    worth knowing this existed silently before now.
+  - tests/test_pipeline_smoke.py: pytest smoke test, runs the full
+    partition -> NSGA-II -> injection -> compression pipeline on a
+    tiny 6-qubit two-cluster circuit in ~10s. Catches pipeline-
+    breaking regressions before a long run, not optimization quality.
+  - requirements.txt: added pytest; deap/pandas/pymoo were already
+    present in this checkout (CLAUDE.md's note that they're missing
+    is stale as of this commit).
+  - Discovered constraint (not a bug, just undocumented): DEAP's
+    NSGA-II tournament selection (selTournamentDCD) requires
+    pop_size % 4 == 0. run_experiment.py now validates this at the
+    CLI level with a clear error instead of a mid-run crash.
+  Not done from the original Phase 0 sketch: none -- the results
+  aggregator was always slated for Phase 1, since it needs several
+  runs to exist first.
+
+Phase 1 — experiment infrastructure (~2-3 weeks) — NOT STARTED
+  - A pandas aggregator that scans runs/*/metrics.json into one master
+    results table (circuit, n_qubits, algorithm, seed, fidelity,
+    depth, gate cost, hypervolume, epsilon, wall-clock) -- the direct
+    source for every paper table/figure.
+  - Automatic multi-seed sweeps (10-20 seeds per config -- a single
+    run's numbers won't survive review), resumable so a laptop can be
+    turned off mid-sweep without losing progress (skip config/seed
+    combos whose runs/ directory already has a metrics.json).
+  - Memoize compute_fidelity / repeated sub-circuit evaluations where
+    chromosomes repeat during GA fitness evaluation.
+  - Stage-level timing (partition / per-block GA / injection /
+    compression) so laptop tuning effort (population size vs.
+    generations) is targeted at the actual bottleneck.
+
+Phase 2 — fixed benchmark suite (through November) — NOT STARTED
+  - Turn the existing one-off Final_test/ circuits (QAOA, W-state,
+    QFT, MaxCut, VQE) into reusable generator functions callable from
+    run_experiment.py (alongside random_weakly_connected_circuit,
+    already wired in as CIRCUIT_GENERATORS["weak_random"]), sized to
+    stay under (or deliberately probe) the 15-qubit fidelity cap.
+  - Run whatever comparisons the paper ends up needing across this
+    fixed benchmark set x seeds, using the Phase 0/1 infrastructure.
+
+Phase 3 — paper writing (November-December) — NOT STARTED
+  - Generate all figures/tables directly from the Phase 1 master
+    results table via script, not hand-tweaked per notebook --
+    reproducible, and easy to regenerate if a reviewer asks for a
+    variant.
