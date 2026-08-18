@@ -439,3 +439,38 @@ Phase 3 — paper writing (November-December) — NOT STARTED
     results table via script, not hand-tweaked per notebook --
     reproducible, and easy to regenerate if a reviewer asks for a
     variant.
+
+=====================================================================
+FRAMEWORK/DEPENDENCY AUDIT (2026-08-18)
+=====================================================================
+Checked the working .venv against PyPI. All 14 direct dependencies
+were current or one patch behind (qiskit 2.5.1 -> 2.5.2 available;
+everything else already latest). No urgent version bumps needed.
+
+Two compatibility issues found and fixed instead:
+1. M1_finale/final_m1_script.py used Qiskit's deprecated
+   CircuitInstruction 3-tuple unpacking (`for inst, qargs, cargs in
+   qc.data:` and `g, q, _ = c.data[i]`-style indexing) in 13 places.
+   Qiskit's own warning: "deprecated legacy behavior since Qiskit 1.2,
+   and will be removed in Qiskit 3.0". Not broken today, but a routine
+   `pip install --upgrade` during the Aug-Dec experiment window could
+   have landed Qiskit 3.0 and silently broken the whole pipeline
+   mid-run. Fixed all 13 sites to use .operation/.qubits/.clbits
+   attribute access instead. Verified with the Phase 0 smoke test run
+   under -W error::DeprecationWarning (passes clean) and a full CLI
+   run with a fixed seed producing byte-identical metrics to the
+   pre-fix run (fidelity/depth/cost unchanged) -- confirms pure
+   refactor, no behavior change.
+2. requirements.txt had zero version pins (just package names). Pinned
+   every entry to the exact version in the working, smoke-tested
+   .venv (numpy==2.5.1, qiskit==2.5.1, qiskit-aer==0.17.2,
+   matplotlib==3.11.1, joblib==1.5.3, scipy==1.18.0, networkx==3.6.1,
+   python-louvain==0.16, scikit-learn==1.9.0, ipykernel==7.3.0,
+   deap==1.4.4, pandas==3.0.5, pymoo==0.6.2, pytest==9.1.1) so
+   `pip install -r requirements.txt` reproduces the same environment
+   later, instead of resolving whatever is newest at install time.
+
+Minor, not acted on: qiskit-aer is in requirements.txt but the main
+pipeline never imports it -- only one throwaway experiment notebook
+(Final_test/nex_formula/test_formule.ipynb) uses it. Left alone since
+removing it wasn't asked for and that notebook may still matter.

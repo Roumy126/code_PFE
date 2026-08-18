@@ -174,13 +174,14 @@ def extract_interblock_gates(qc: QuantumCircuit, blocks: List[Set[int]]) -> List
     """
     bmap = {q: i for i, bl in enumerate(blocks) for q in bl}
     interblock_gates = []
-    for inst, qargs, cargs in qc.data:
+    for ci in qc.data:
+        qargs = ci.qubits
         if len(qargs) < 2:
             continue
         qubit_indices = {qc.find_bit(q).index for q in qargs}
         involved_blocks = {bmap.get(q) for q in qubit_indices}
         if len(involved_blocks) > 1:
-            interblock_gates.append((inst, qargs, cargs))
+            interblock_gates.append((ci.operation, qargs, ci.clbits))
     return interblock_gates
 
 
@@ -192,7 +193,8 @@ def louvain_partition(qc: QuantumCircuit) -> List[Set[int]]:
     G = nx.Graph()
     G.add_nodes_from(range(qc.num_qubits))
 
-    for inst, qargs, _ in qc.data:
+    for ci in qc.data:
+        qargs = ci.qubits
         if len(qargs) == 2:
             i = qc.find_bit(qargs[0]).index
             j = qc.find_bit(qargs[1]).index
@@ -215,9 +217,9 @@ def build_interaction_graph(qc: QuantumCircuit) -> nx.Graph:
     """
     G = nx.Graph()
     G.add_nodes_from(range(qc.num_qubits))
-    for inst, qargs, _ in qc.data:
-        if inst.name in {"cx", "cz", "rzz"} and len(qargs) == 2:
-            i, j = [qc.find_bit(q).index for q in qargs]
+    for ci in qc.data:
+        if ci.operation.name in {"cx", "cz", "rzz"} and len(ci.qubits) == 2:
+            i, j = [qc.find_bit(q).index for q in ci.qubits]
             w = G.get_edge_data(i, j, default={"weight": 0})["weight"] + 1
             G.add_edge(i, j, weight=w)
     return G
@@ -258,7 +260,8 @@ def _interblock_gate_cost(qc: QuantumCircuit, blk0: Set[int], blk1: Set[int]) ->
     Computes the cost (number of gates) connecting two given blocks.
     """
     cost = 0
-    for inst, qargs, _ in qc.data:
+    for ci in qc.data:
+        qargs = ci.qubits
         if len(qargs) < 2:
             continue
         qs = {qc.find_bit(q).index for q in qargs}
@@ -351,10 +354,11 @@ def extract_subcircuit(qc: QuantumCircuit, qubits: Set[int]) -> QuantumCircuit:
     local_index = {q: i for i, q in enumerate(sorted(list(qubits)))}
 
     # We only keep the gates that act EXCLUSIVELY on qubits of the block
-    for inst, qargs, cargs in qc.data:
+    for ci in qc.data:
+        qargs = ci.qubits
         if all(qc.find_bit(q).index in qubits for q in qargs):
             remapped_qargs = [sub.qubits[local_index[qc.find_bit(q).index]] for q in qargs]
-            sub.append(inst, remapped_qargs, cargs)
+            sub.append(ci.operation, remapped_qargs, ci.clbits)
 
     return sub
 
@@ -394,7 +398,8 @@ def recompose_from_blocks(
     subcircuit_cursors = [0 for _ in block_subcircuits]
 
     # Iterate over the gates of the original circuit, in order
-    for inst, qargs, cargs in qc_original.data:
+    for ci in qc_original.data:
+        qargs = ci.qubits
         # Global indices touched by the current gate
         q_indices = [qc_original.find_bit(q).index for q in qargs]
         inserted = False
@@ -406,7 +411,8 @@ def recompose_from_blocks(
                 if subcircuit_cursors[idx] >= len(sub.data):
                     raise ValueError(f"Too many gates requested for block {idx} relative to its sub-circuit.")
 
-                inst_opt, qargs_opt, cargs_opt = sub.data[subcircuit_cursors[idx]]
+                ci_opt = sub.data[subcircuit_cursors[idx]]
+                inst_opt, qargs_opt, cargs_opt = ci_opt.operation, ci_opt.qubits, ci_opt.clbits
                 subcircuit_cursors[idx] += 1
 
                 # Remap the sub-circuit's local qubits to their original GLOBAL indices
@@ -420,7 +426,7 @@ def recompose_from_blocks(
         # If the gate does not belong to a single block (inter-block gate), keep the original gate
         if not inserted:
             mapped_qargs = [qc_recomposed.qubits[i] for i in q_indices]
-            qc_recomposed.append(inst, mapped_qargs, cargs)
+            qc_recomposed.append(ci.operation, mapped_qargs, ci.clbits)
 
     return qc_recomposed
 
@@ -490,8 +496,8 @@ def cancel_inverse_gates(c: QuantumCircuit) -> QuantumCircuit:
     for i in range(len(c.data) - 1):
         if i in skip:
             continue
-        g1, q1, _ = c.data[i]
-        g2, q2, _ = c.data[i + 1]
+        g1, q1 = c.data[i].operation, c.data[i].qubits
+        g2, q2 = c.data[i + 1].operation, c.data[i + 1].qubits
 
         if g1.name == g2.name and q1 == q2 and g1.name in {"x", "y", "z", "h", "cx"}:
             # g then g => identity
@@ -501,7 +507,7 @@ def cancel_inverse_gates(c: QuantumCircuit) -> QuantumCircuit:
 
     # Last gate if not skipped
     if (len(c.data) - 1) not in skip and len(c.data) > 0:
-        g, q, _ = c.data[-1]
+        g, q = c.data[-1].operation, c.data[-1].qubits
         new.append(g, q)
     return new
 
@@ -514,13 +520,13 @@ def merge_rotations(c: QuantumCircuit) -> QuantumCircuit:
     new = QuantumCircuit(c.num_qubits)
     i = 0
     while i < len(c.data):
-        g, q, _ = c.data[i]
+        g, q = c.data[i].operation, c.data[i].qubits
         if g.name in {"rx", "ry", "rz"}:
             angle = g.params[0]
             j = i + 1
             # Accumulate as long as the type AND target are identical
             while j < len(c.data):
-                g2, q2, _ = c.data[j]
+                g2, q2 = c.data[j].operation, c.data[j].qubits
                 if g2.name == g.name and q2 == q:
                     angle += g2.params[0]
                     j += 1
@@ -540,7 +546,8 @@ def remove_negligible_rotations(c: QuantumCircuit, *, th: float = 1e-4) -> Quant
     Removes rx/ry/rz rotations of very low amplitude (|theta| < th).
     """
     new = QuantumCircuit(c.num_qubits)
-    for g, q, _ in c.data:
+    for ci in c.data:
+        g, q = ci.operation, ci.qubits
         if g.name in {"rx", "ry", "rz"} and abs(float(g.params[0])) < th:
             # ignore this small rotation
             continue
@@ -722,7 +729,7 @@ def compute_gate_cost(qc: QuantumCircuit) -> float:
         "x": 1, "z": 1, "s": 1, "sdg": 1, "t": 1, "tdg": 1,
         "h": 2, "cx": 5, "cz": 5, "ccx": 13
     }
-    return sum(cost_table.get(inst.name.lower(), 1) for inst, _, _ in qc.data)
+    return sum(cost_table.get(ci.operation.name.lower(), 1) for ci in qc.data)
 
 
 def update_rotation_angles(
@@ -1290,9 +1297,9 @@ def optimise_circuit_pipeline(
     qc_rebuilt_original_qubits = QuantumCircuit(qc.num_qubits)
     for qubits_list, cir in block_circuits:
         local_to_global_map = {i: q_idx for i, q_idx in enumerate(qubits_list)}
-        for inst, qargs, cargs in cir.data:
-            global_qargs = [qc_rebuilt_original_qubits.qubits[local_to_global_map[cir.find_bit(q).index]] for q in qargs]
-            qc_rebuilt_original_qubits.append(inst, global_qargs, cargs)
+        for ci in cir.data:
+            global_qargs = [qc_rebuilt_original_qubits.qubits[local_to_global_map[cir.find_bit(q).index]] for q in ci.qubits]
+            qc_rebuilt_original_qubits.append(ci.operation, global_qargs, ci.clbits)
     print("\nRecomposed circuit (before interface SWAP and duplication):")
     print(qc_rebuilt_original_qubits.draw(output="text"))
     fid_rebuilt = compute_fidelity(qc_rebuilt_original_qubits, U_orig)
