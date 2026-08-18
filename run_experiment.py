@@ -1,0 +1,147 @@
+#!/usr/bin/env python
+"""CLI runner for a single configuration of the M1_finale optimization pipeline.
+
+Generates a circuit, runs optimise_circuit_pipeline once, and writes
+structured, JSON-serializable artifacts under runs/<run_id>/ instead of
+leaving results as stdout prints and loose PNGs in the working directory.
+This is the building block for multi-seed sweeps: run it once per
+(circuit config, algorithm config, seed) and later aggregate runs/*/metrics.json
+into one results table.
+
+Example:
+    python run_experiment.py --n-qubits 12 --seed 0 --generations 100 --pop-size 100
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import random
+import sys
+import time
+import uuid
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from M1_finale.final_m1_script import (  # noqa: E402
+    optimise_circuit_pipeline,
+    random_weakly_connected_circuit,
+)
+
+try:
+    from qiskit import qpy
+except ImportError:  # pragma: no cover
+    qpy = None
+
+CIRCUIT_GENERATORS = {
+    "weak_random": random_weakly_connected_circuit,
+}
+
+
+def make_json_safe(obj):
+    """Recursively convert sets/tuples/numpy types into plain JSON-serializable values."""
+    if isinstance(obj, dict):
+        return {str(k): make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        return [make_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, (int, float, str, bool)) or obj is None:
+        return obj
+    return str(obj)
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--circuit", choices=sorted(CIRCUIT_GENERATORS), default="weak_random")
+    p.add_argument("--n-qubits", type=int, default=30)
+    p.add_argument("--depth", type=int, default=20)
+    p.add_argument("--twoq-gates-total", type=int, default=8)
+    p.add_argument("--connectivity-edges", type=int, default=5)
+    p.add_argument("--injection-method", choices=["sa", "stochastic"], default="stochastic")
+    p.add_argument("--fid-threshold", type=float, default=0.9999)
+    p.add_argument("--sa-iters", type=int, default=3000)
+    p.add_argument("--generations", type=int, default=500)
+    p.add_argument("--pop-size", type=int, default=400,
+                    help="Must be a multiple of 4 (DEAP's NSGA-II tournament selection requires it).")
+    p.add_argument("--qubit-duplication-threshold", type=float, default=0.6)
+    p.add_argument("--seed", type=int, default=0,
+                    help="Seeds circuit generation, the GA, and inter-block injection for reproducibility.")
+    p.add_argument("--runs-dir", default="runs")
+    p.add_argument("--run-id", default=None,
+                    help="Defaults to '<circuit>_<n_qubits>q_seed<seed>_<8-char-uuid>'.")
+    args = p.parse_args(argv)
+    if args.pop_size % 4 != 0:
+        p.error(f"--pop-size must be a multiple of 4 (got {args.pop_size}): "
+                "DEAP's NSGA-II tournament selection (selTournamentDCD) requires it.")
+    return args
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
+    run_id = args.run_id or f"{args.circuit}_{args.n_qubits}q_seed{args.seed}_{uuid.uuid4().hex[:8]}"
+    run_dir = (Path(args.runs_dir) / run_id).resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    config = vars(args).copy()
+    config["run_id"] = run_id
+    (run_dir / "config.json").write_text(json.dumps(config, indent=2))
+
+    gen_fn = CIRCUIT_GENERATORS[args.circuit]
+    qc = gen_fn(
+        n_qubits=args.n_qubits,
+        depth=args.depth,
+        twoq_gates_total=args.twoq_gates_total,
+        connectivity_edges=args.connectivity_edges,
+        seed=args.seed,
+    )
+
+    # optimise_circuit_pipeline writes figures via relative paths (cwd and
+    # cwd/out_figs), so run it from inside the run's own directory to keep
+    # each run's artifacts isolated instead of overwriting a shared location.
+    prev_cwd = os.getcwd()
+    os.chdir(run_dir)
+    try:
+        t0 = time.perf_counter()
+        qc_opt, meta = optimise_circuit_pipeline(
+            qc,
+            injection_method=args.injection_method,
+            fid_threshold=args.fid_threshold,
+            sa_iters=args.sa_iters,
+            sa_seed=args.seed,
+            qubit_duplication_threshold=args.qubit_duplication_threshold,
+            generations=args.generations,
+            pop_size=args.pop_size,
+        )
+        wall_clock_s = time.perf_counter() - t0
+    finally:
+        os.chdir(prev_cwd)
+
+    meta["wall_clock_s"] = wall_clock_s
+    (run_dir / "metrics.json").write_text(json.dumps(make_json_safe(meta), indent=2))
+
+    if qpy is not None:
+        with open(run_dir / "final_circuit.qpy", "wb") as f:
+            qpy.dump(qc_opt, f)
+
+    print(f"\nRun complete: {run_id}")
+    print(f"  fidelity_final = {meta['fidelity_final']:.5f}")
+    print(f"  depth {meta['depth_before']} -> {meta['depth_after']}")
+    print(f"  cost {meta['cost_before']} -> {meta['cost_after']}")
+    print(f"  wall clock: {wall_clock_s:.1f}s")
+    print(f"  artifacts written to: {run_dir}")
+    return meta
+
+
+if __name__ == "__main__":
+    main()

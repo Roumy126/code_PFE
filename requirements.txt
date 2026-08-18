@@ -11,3 +11,4 @@ ipykernel
 deap
 pandas
 pymoo
+pytest

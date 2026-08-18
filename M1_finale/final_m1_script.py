@@ -789,7 +789,9 @@ def update_rotation_angles(
 
 def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size=300, n_jobs=-1, P_star=None):
     nq = qc_target.num_qubits; U_target = Operator(qc_target).data
-    gate_pool = ["h", "x", "y", "z", "rx", "ry", "rz", "cx", "cz", "rzz"]
+    gate_pool = ["h", "x", "y", "z", "rx", "ry", "rz"]
+    if nq >= 2:
+        gate_pool += ["cx", "cz", "rzz"]
 
     def gen_gene():
         g = random.choice(gate_pool); tgt = random.randrange(nq)
@@ -1055,7 +1057,8 @@ def sa_injection(base_qc: QuantumCircuit, blocks: List[Set[int]], *,
 def stochastic_injection(qc: QuantumCircuit, blocks: List[Set[int]], *,
                          n_injections: int = 100,
                          fid_threshold: float = 0.999,
-                         gate_probs: Optional[Dict[str, float]] = None) -> Tuple[QuantumCircuit, List[Tuple[str, int, int, Optional[float]]]]:
+                         gate_probs: Optional[Dict[str, float]] = None,
+                         seed: Optional[int] = None) -> Tuple[QuantumCircuit, List[Tuple[str, int, int, Optional[float]]]]:
     """
     Stochastic inter-block injection: we add gates at random and only keep
     those that do not degrade the fidelity below the threshold.
@@ -1067,7 +1070,7 @@ def stochastic_injection(qc: QuantumCircuit, blocks: List[Set[int]], *,
     total = sum(gate_probs.values())
     gate_types, probs = zip(*([(g, p / total) for g, p in gate_probs.items()]))
 
-    rng = random.Random()
+    rng = random.Random(seed)
     kept: List[Tuple[str, int, int, Optional[float]]] = []
     U_ref = Operator(qc).data
 
@@ -1204,6 +1207,8 @@ def optimise_circuit_pipeline(
     sa_iters: int = 2500,
     sa_seed: Optional[int] = 42,
     qubit_duplication_threshold: float = 0.5,
+    generations: int = 500,
+    pop_size: int = 400,
 ) -> Tuple[QuantumCircuit, Dict[str, object]]:
     print("\nOriginal circuit:")
     print(qc.draw(output="text"))
@@ -1267,7 +1272,7 @@ def optimise_circuit_pipeline(
         print(sub.draw(output="text"))
         sub.draw('mpl', filename=f"block_{idx}_circuit_original.png", style='mpl', fold=1)
         print("  → NSGA-II optimization in progress...")
-        best, hist_moo = optimise_block_nsga2(sub, generations=500, pop_size=400)
+        best, hist_moo = optimise_block_nsga2(sub, generations=generations, pop_size=pop_size)
         moo_metrics_blocks.append(hist_moo[-1] if hist_moo else {})
         plot_moo_history(hist_moo, title=f"Evolution MoO - Block {idx}", save_as=f"moo_evolution_block_{idx}.png")
         export_all_indicators(hist_moo, idx)
@@ -1306,7 +1311,8 @@ def optimise_circuit_pipeline(
         qc_inj, kept = sa_injection(qc_rebuilt_original_qubits, original_blocks, fid_threshold=fid_threshold,
                                     n_iters=sa_iters, seed=sa_seed)
     elif injection_method == "stochastic":
-        qc_inj, kept = stochastic_injection(qc_rebuilt_original_qubits, original_blocks, fid_threshold=fid_threshold)
+        qc_inj, kept = stochastic_injection(qc_rebuilt_original_qubits, original_blocks, fid_threshold=fid_threshold,
+                                            seed=sa_seed)
     else:
         raise ValueError('injection_method must be "sa" or "stochastic".')
     print("\nCircuit after inter-block injection:")
