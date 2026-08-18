@@ -1,0 +1,348 @@
+PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
+Generated: 2026-08-18
+
+=====================================================================
+PROJECT OVERVIEW
+=====================================================================
+Academic research project (French PFE — end-of-studies project) on
+optimizing quantum circuits with genetic algorithms. Goal: take a
+target quantum circuit (or unitary), partition it, and evolve a
+cheaper/shallower circuit that still reproduces the target's behavior
+with high fidelity.
+
+Stack: Qiskit (circuit simulation) + DEAP (evolutionary computation,
+NSGA-II / NSGA-III style multi-objective optimization).
+
+The codebase is a research sandbox, not a packaged library: a
+progression of standalone Jupyter notebooks and scripts, each an
+iteration of the same core pipeline (mono-objective -> multi-objective
+-> block-decomposed/scalable). No shared package, no test suite, no
+build step.
+
+=====================================================================
+REPOSITORY STRUCTURE (reading order / sophistication progression)
+=====================================================================
+1. AG_mono/
+   Mono-objective genetic algorithm: evolve a chromosome (gate
+   sequence) approximating a target unitary, optimizing fidelity only.
+
+2. NSGA-II/, NSGA-III/
+   Multi-objective versions (fidelity, depth, gate cost) using DEAP's
+   NSGA-II/NSGA-III selection.
+   NOTE: this checked-out copy DOES contain an NSGA-III/ directory
+   (AG_multi_objectifs_NSGA3.ipynb). Flagged for follow-up since this
+   fork was reported to be missing the NSGA-III implementation done
+   in a prior session — verify whether this notebook is the same
+   version, an earlier draft, or something else before assuming it
+   needs to be re-added.
+
+3. m1/, m1_bloc_indep/, M1_indicateurs_version/, M1_finale/
+   "M1" line of work: adds circuit partitioning into qubit blocks (so
+   NSGA-II runs per-block instead of on the whole circuit) plus
+   quality indicators (hypervolume, IGD, spread, epsilon).
+   M1_finale/ is the most complete/cleaned-up version, with extracted
+   .py scripts alongside its notebook.
+   -> M1_finale/final_m1_script.py is the canonical, most-maintained
+      pipeline implementation (1485 lines).
+
+4. m2_bloc_chevauche/
+   "Block overlap" variant: blocks may share qubits at interfaces
+   rather than being a strict partition.
+
+5. Final_test/, final_test_AG/, test/
+   Later validation/experiment notebooks applying the pipeline to
+   specific target circuits (QAOA, MaxCut, W-state, QFT, VQE,
+   14/64-qubit cases, etc.), one subdirectory per experiment. These
+   are throwaway experiment copies, not a distinct architecture.
+
+Duplicated notebook snapshots (e.g. "code_travaille copy 3.ipynb",
+"test3D(1) copy.ipynb") are not divergent components — don't assume
+fixes need to be propagated across copies without checking first.
+
+=====================================================================
+CORE PIPELINE (M1_finale/final_m1_script.py) — reference implementation
+=====================================================================
+Entry point: optimise_circuit_pipeline(...)
+
+1. Partitioning
+   - build_interaction_graph: qubit-interaction graph weighted by
+     2-qubit gate count.
+   - louvain_partition: Louvain community detection to split qubits
+     into blocks.
+   - multilevel_partition: Metis/Kernighan-Lin recursive alternative
+     for bounding block size.
+   - extract_interblock_gates: captures gates crossing block
+     boundaries for later reinjection.
+
+2. Sub-circuit extraction / recomposition
+   - extract_subcircuit: pulls a self-contained, locally-reindexed
+     circuit per block.
+   - recompose_from_blocks: stitches optimized block circuits back
+     into a global circuit in original gate order, preserving
+     inter-block gates unchanged.
+
+3. Fidelity metric
+   - compute_fidelity: operator-overlap fidelity
+     |Tr(U_circ . U_target^dagger)| / 2^n.
+   - Short-circuits to 1.0 above 15 qubits to avoid dense-matrix
+     blowup — this cap is why the pipeline is only exercised on
+     small/weakly-connected circuits despite claiming to scale.
+
+4. Intra-block optimization
+   - optimise_block_nsga2: DEAP NSGA-II per block, three objectives
+     (maximize fidelity, minimize transpiled depth, minimize
+     chromosome-length cost).
+   - update_rotation_angles: finite-difference local search ("LAS")
+     nudging rotation angles after the genetic search converges.
+
+5. Inter-block gate injection (re-adds cross-block entanglement lost
+   during block-local optimization)
+   - sa_injection: simulated annealing over an energy combining gate
+     count, depth, crosstalk, fidelity penalty.
+   - stochastic_injection: random trial-and-keep-if-fidelity-improves.
+   - fidelity_driven_injection: simpler greedy variant, used as a
+     complementary final pass.
+
+6. Compression
+   - Hand-rolled passes: cancel_inverse_gates, merge_rotations,
+     remove_negligible_rotations (composed in compress_custom).
+   - Standard Qiskit PassManager pass (qiskit_opt_pass):
+     Optimize1qGates + CommutativeCancellation.
+
+7. Multi-objective quality indicators
+   - evaluate_run / compute_hv / spread_delta / compute_spacing /
+     compute_epsilon: hypervolume, spread, spacing, epsilon indicator,
+     and IGD when a reference Pareto front (P_star) is supplied.
+   - Tracked across generations, not just best-fitness.
+   - export_all_indicators / plot_moo_history / save_plot /
+     plot_convergence / plot_pareto / plot_3d_clusters write PNGs to
+     out_figs/ (created on demand).
+
+Later stages depend on earlier ones' output shape (block list,
+per-block optimized circuit, kept-injection list) — check
+optimise_circuit_pipeline's call sequence before changing an output
+type.
+
+Also present: random_weakly_connected_circuit — generates synthetic
+test circuits (used by the 30-qubit and 64-qubit runnable examples).
+
+=====================================================================
+CONVENTIONS SPECIFIC TO THIS CODEBASE
+=====================================================================
+- Chromosome encoding: individuals are Python lists of gene tuples
+  (gate_name, target_qubit, ctrl_qubit_or_None, angle_or_None). Any
+  new gate type added to a gate_pool needs matching branches in every
+  build/build_fn closure that turns chromosomes into QuantumCircuits
+  (these closures are redefined locally inside each optimisation
+  function rather than shared).
+- DEAP creator classes (creator.FitnessMulti, creator.Individual) are
+  registered guarded by hasattr(creator, ...) checks since DEAP raises
+  on re-registration — preserve this guard across notebook re-runs.
+- Figures are a primary output, not incidental logging — stdout
+  progress prints use emoji status markers (checkmark/cross/money/
+  pin-style icons). Keep this pattern when extending a pipeline stage.
+- Comments, docstrings, print messages, plot labels, and markdown
+  prose are English throughout (originally French, translated in
+  full). The two thesis PDFs at the repo root remain in French
+  (academic writeups, not code).
+- Most heavy computation (chromosome fitness evaluation) is
+  parallelized via joblib.Parallel(n_jobs=...) — eval_ind-style
+  functions must stay picklable for multiprocessing.
+
+=====================================================================
+SETUP / RUNNING
+=====================================================================
+pip install -r requirements.txt
+
+requirements.txt at repo root is incomplete for several
+notebooks/scripts — missing deap, pandas, pymoo (imported throughout,
+e.g. M1_finale/, most Final_test/* notebooks). M1_finale/requirements_m1.txt
+has the fuller list for that subproject (adds nbconvert, pylatexenc).
+
+No project-wide CLI entry point. Work happens by opening a notebook
+(jupyter notebook) or running an extracted .py script directly:
+  python M1_finale/final_m1_script.py     # full pipeline, generated 30-qubit circuit
+  python M1_finale/run_m1_test.py         # quick pipeline smoke test
+  python M1_finale/circuit_64qubits.py    # 64-qubit weakly-connected circuit run
+
+No lint/format/test commands exist — there is no test suite.
+
+Committed .venv/, mon_env/, envq/ are local virtualenvs (gitignored
+alongside __pycache__/, *.pyc, .ipynb_checkpoints/) — never edit files
+inside them.
+
+=====================================================================
+OPEN ITEM
+=====================================================================
+- Confirm status of the NSGA-III implementation in this fork
+  (NSGA-III/AG_multi_objectifs_NSGA3.ipynb exists on disk as of this
+  log, but was reported missing relative to a version built together
+  in a prior session — needs a diff/comparison against that prior
+  version to determine what, if anything, is actually missing).
+
+=====================================================================
+NEXT STEPS — CANDIDATE MOO ALGORITHMS TO ADD
+=====================================================================
+Beyond NSGA-II/NSGA-III, the following multi-objective algorithms
+would fit naturally into the existing per-block optimization slot
+(currently optimise_block_nsga2 in M1_finale/final_m1_script.py) and
+could be added as interchangeable strategies, similar to how
+sa_injection / stochastic_injection / fidelity_driven_injection are
+already interchangeable for the injection stage.
+
+1. SMS-EMOA (S-Metric Selection EMOA)
+   - Hypervolume-indicator-driven selection instead of crowding
+     distance. Directly reuses the project's existing compute_hv
+     function as the selection criterion rather than just as a
+     post-hoc reporting metric — tightest synergy with code already
+     in the repo.
+   - Tends to produce better-distributed, higher-quality fronts than
+     NSGA-II for 2-3 objectives (fidelity, depth, cost), at higher
+     per-generation cost (hypervolume contribution calculation).
+
+2. IBEA (Indicator-Based Evolutionary Algorithm)
+   - Generalizes SMS-EMOA to arbitrary indicators; could plug in
+     compute_epsilon (already implemented) as the driving indicator
+     instead of hypervolume. Good candidate for comparing indicator
+     choices against each other using the project's own
+     evaluate_run/export_all_indicators reporting.
+
+3. MOEA/D (Decomposition-based MOEA)
+   - Decomposes the 3-objective problem (fidelity, depth, cost) into
+     scalar subproblems via weight vectors (Tchebycheff or weighted
+     sum), each solved cooperatively with neighbor information sharing.
+   - pymoo (already a project dependency per requirements notes) ships
+     a ready MOEA/D implementation — lowest implementation cost of
+     this list if built on pymoo rather than hand-rolled in DEAP.
+   - Conceptually maps well onto the block-partition architecture:
+     each qubit block could own a distinct region of weight-vector
+     space rather than all blocks running identical NSGA-II.
+
+4. SPEA2 (Strength Pareto EA 2)
+   - Classic alternative fitness assignment (strength + density via
+     k-th nearest neighbor) with an external archive of fixed size.
+   - Useful as a baseline comparison against NSGA-II on the same
+     3-objective problem to see whether NSGA-II's crowding distance
+     is actually the best diversity mechanism for this circuit search
+     space, or just the default choice inherited from earlier
+     iterations of the project.
+
+5. Multi-Objective Simulated Annealing (MOSA)
+   - The project already has single-objective SA for inter-block
+     injection (sa_injection, energy = weighted combination of gate
+     count, depth, crosstalk, fidelity penalty). A genuinely
+     multi-objective SA (Pareto-dominance-based acceptance criterion,
+     archive of non-dominated states) could replace that weighted-sum
+     energy function and produce a full injection-stage Pareto front
+     instead of a single injected solution.
+   - Lower implementation lift than the above since it extends
+     existing SA machinery (_sa_energy, _sa_rand_move, _sa_generate_pool)
+     rather than introducing a new population-based framework.
+
+6. MOPSO (Multi-Objective Particle Swarm Optimization)
+   - Different metaheuristic paradigm (swarm, not GA) — worth
+     including as a diversity-of-method comparison point in the
+     thesis, since all current algorithms (NSGA-II/III, SA variants)
+     are either GA- or SA-based.
+   - Chromosome encoding (gate_name, target_qubit, ctrl_qubit, angle)
+     would need a continuous-relaxation or discrete-PSO adaptation
+     before particles can be applied to gate sequences — higher
+     implementation cost than the others on this list.
+
+Suggested priority order given existing code reuse:
+  MOSA (extends sa_injection) > SMS-EMOA (reuses compute_hv) >
+  IBEA (reuses compute_epsilon) > MOEA/D (via pymoo) > SPEA2 > MOPSO.
+
+=====================================================================
+NEXT STEPS — IMPROVEMENTS FROM RELATED WORK (web research, 2026-08-18)
+=====================================================================
+Grounded in recent (2024-2026) literature on GA/MOO quantum circuit
+optimization, partitioning, and alternatives. Each item names why it
+applies to this specific codebase, not just in general.
+
+1. Hyperedge-aware partitioning instead of pairwise Louvain clustering
+   - build_interaction_graph/louvain_partition collapse multi-qubit
+     gates to pairwise edges and fix block structure via modularity.
+   - A 2025 dynamic hypergraph partitioning approach models gates as
+     hyperedges (qubit x time nodes) and sweeps block-count K with
+     METIS instead of assuming modularity picks the right K.
+   - Source: arXiv 2506.09963
+
+2. Cheaper fidelity proxy to replace the hard 15-qubit cutoff
+   - compute_fidelity short-circuits to 1.0 above 15 qubits — a
+     "Scalable Multi-Objective Genetic Algorithm for Quantum Circuit
+     Optimization" paper targets this exact bottleneck via a
+     projection-based approximation + structure-aware local metric
+     folded directly into NSGA-II, avoiding full dense-unitary builds.
+   - Source: nature.com/articles/s41598-026-47674-5 (worth reading in
+     full; preprint mirror was paywalled/403 at research time)
+
+3. Classical-shadow / tensor-network fidelity estimation for scale
+   - Tensor-network-backed classical shadow tomography gives
+     sample-efficient fidelity/property estimation without building
+     the full 2^n x 2^n operator — would let the pipeline's scaling
+     claims actually be tested past 15 qubits instead of stubbed out.
+   - Source: arXiv 2209.02093
+
+4. Benchmark mutation operator combinations explicitly
+   - GECCO 2025 work found "swap+addition" maximizes fidelity but
+     grows depth, while "swap+addition+delete" gives a better
+     fidelity/depth balance.
+   - optimise_block_nsga2's mutation operators are currently a fixed,
+     one-off choice — this gives a citable, testable ablation to run
+     per-block and report on.
+   - Source: arXiv 2504.06413
+
+5. Formalize the hybrid GA + parameter-refinement split as a named,
+   compared variant
+   - A companion GECCO 2025 paper separates "hybrid" (GA + rotation-
+     parameter subroutine) from "pure" (mutation/crossover only)
+     variants, and tests both "build from scratch" and "refine
+     existing circuit" starting points.
+   - This project already has an ad-hoc version of the hybrid idea
+     (update_rotation_angles/LAS after NSGA-II) but has never
+     formalized it as a variant to compare against pure-GA — an easy
+     controlled experiment to add.
+   - Source: arXiv 2504.17561
+
+6. RL + ZX-calculus as a compression-stage alternative
+   - An RL agent (PPO + GNN) applying ZX-diagram rewrite rules scales
+     to 80 qubits / thousands of gates and beats hand-coded ZX
+     simplification strategies; a PyZX-based Qiskit transpiler pass
+     exists for integration.
+   - compress_custom's hand-rolled inverse-cancellation/rotation-
+     merging passes are exactly the category of hand-coded rule this
+     method outperforms — could be swapped in, or run as an
+     additional final compression pass.
+   - Source: arXiv 2312.11597 (Quantum, 2025)
+
+7. Add a noise/crosstalk-aware objective, not just math fidelity
+   - Frameworks like CQC (crosstalk-aware compilation) and CCMap
+     (coupler-aligned, noise-aware modular compilation; +21.9%
+     fidelity / -58.6% compile cost vs baselines in their reported
+     results) fold real device error rates and crosstalk into the
+     cost function rather than treating fidelity as pure unitary
+     overlap.
+   - Directly closes a gap this project's own docs already note (no
+     noise model, no coupling-map awareness) — could become a 4th
+     NSGA-II objective, or a term in the SA injection energy function
+     (_sa_energy already has a crosstalk term placeholder to extend).
+   - Sources: arXiv 2207.05751, arXiv 2505.09036
+
+8. Noise-weighted partition cuts
+   - DisMap/FitCut-style distributed compilation weights partition
+     boundaries by qubit error rate/topology, not just gate-crossing
+     count, when deciding where to cut.
+   - extract_interblock_gates/partitioning currently only minimizes
+     cross-block gate count — adding a hardware-error term would make
+     block boundaries reflect real device quality, complementing #7.
+
+Suggested priority given effort vs payoff for the thesis:
+  #4 and #5 (cheap, purely experimental/ablation, no new deps) >
+  #1 (partitioning quality, moderate effort) >
+  #2/#3 (removes the 15-qubit ceiling, the project's most-cited
+  limitation, but higher implementation effort) >
+  #7/#8 (adds a genuinely new evaluation dimension — hardware realism
+  — but requires picking/simulating a device noise model) >
+  #6 (biggest potential compression win, but pulls in an external
+  RL+ZX-calculus dependency chain, best as a stretch goal).
