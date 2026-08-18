@@ -7,19 +7,30 @@ The project uses **Qiskit** to build and simulate quantum circuits, along with s
 
 ## Installation
 
-To install the required dependencies, make sure Python is installed, then run:
+Create and activate a virtual environment, then install the required dependencies:
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate      # on Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+If a `.venv/` already exists (e.g. it came with the repo), just activate it:
+
+```bash
+source .venv/bin/activate
+```
+
+Once active, your prompt shows `(.venv)` and plain `python`/`pip`/`jupyter`/`pytest` resolve to this environment. To leave it: `deactivate`.
 
 ## Usage
 
 The project is mainly organized around Jupyter notebooks. To explore and run the code:
 
-1. Launch Jupyter Notebook or JupyterLab:
+1. Activate the virtual environment (see Installation above), then launch JupyterLab:
    ```bash
-   jupyter notebook
+   source .venv/bin/activate
+   jupyter lab
    ```
 2. Open one of the main notebooks, for example:
    - `AG_mono/code_ag.ipynb`: Mono-objective genetic algorithm.
