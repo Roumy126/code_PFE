@@ -4,8 +4,10 @@ Last updated: 2026-08-19 (Phase 1 — experiment infrastructure — completed;
 Phase 2 circuit generators — completed; Phase 2 8-qubit benchmark sweep —
 completed (50/50 runs); the fidelity-computation scaling problem that
 blocked 12+ qubit tiers is now FIXED — see "FIDELITY-COMPUTATION SCALING
-FIX" section below — though the larger-qubit sweep itself hasn't been
-re-run yet)
+FIX" section below. The 12/16/20-qubit sweep (50 configs, stochastic only
+— see Phase 2's update note) was launched, then intentionally stopped
+mid-run to continue the next day; resuming `python run_sweep.py` picks up
+exactly where it left off via its existing skip-if-done logic)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -589,6 +591,36 @@ Phase 2 — fixed benchmark suite (through November) — PARTIALLY DONE (2026-08
   choosing a research-contribution angle -- see the MOO-algorithm and
   related-work sections above). The 12/16/20-qubit tiers were blocked
   on the fidelity-scaling problem -- see below, now fixed.
+
+  Update (2026-08-19, after the fidelity-scaling fix): restored
+  run_sweep.py's CIRCUIT_QUBIT_SIZES to the original larger sizes
+  (weak_random: 8/12/20, others: 8/12/16). Before launching the full
+  remaining grid, timed real-settings (generations=100, pop_size=100)
+  12-qubit runs to check actual feasibility rather than assume the fix
+  alone was enough:
+  - sa injection, default sa_iters=3000: 1295s (~21.6 min), almost all
+    of it (1242s) in the injection stage.
+  - stochastic injection, defaults: 520s (~8.7 min).
+  - sa injection, sa_iters reduced to 150 (20x cut): 547s (~9.1 min) --
+    converges to almost the same cost as stochastic.
+  Conclusion: the actual fixed cost driver at this scale is the
+  ALWAYS-ON greedy fidelity_driven_injection pass (300 trials,
+  independent of --injection-method), not sa_iters itself -- reducing
+  sa_iters just brings sa down to the same floor stochastic already
+  sits at. Combined with the 8-qubit finding that the greedy pass wins
+  48/50 runs regardless of injection method, sa isn't worth its extra
+  cost above the fidelity exact_threshold -- added LARGE_N_THRESHOLD=10
+  to run_sweep.py's build_grid to drop sa from the grid above that
+  size rather than tune sa_iters down further. Resulting grid: 100
+  configs (50 already done at 8q with both methods, 50 remaining, all
+  stochastic, at 12/16/20q) -- roughly halves the original ~15-17h
+  estimate to ~7.5-8h.
+  Launched the remaining 50-config sweep in the background, then
+  stopped it on request (killed cleanly, no orphaned processes, the
+  one in-progress run's partial directory removed) to continue another
+  day -- run_sweep.py's resumability means re-running the identical
+  command later picks up exactly where this left off, no lost work.
+  Not started: actually finishing this 50-config run (resume tomorrow).
 
 =====================================================================
 FIDELITY-COMPUTATION SCALING FIX (2026-08-19)

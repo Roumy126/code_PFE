@@ -11,9 +11,10 @@ rest of the sweep and no run leaks state (matplotlib figures, DEAP's
 
 The grid below is the Phase 2 "fixed benchmark set": all five circuit
 generators wired into run_experiment.py's CIRCUIT_GENERATORS, each swept at
-a couple of sizes below the 15-qubit fidelity cap plus one at/above it to
-deliberately probe the cap -- edit CIRCUITS / CIRCUIT_QUBIT_SIZES /
-INJECTION_METHODS / N_SEEDS directly, or use the CLI overrides.
+a couple of sizes below the fidelity exact_threshold (10) plus one above it
+to exercise the approximate Monte-Carlo SWAP-test fidelity path -- edit
+CIRCUITS / CIRCUIT_QUBIT_SIZES / INJECTION_METHODS / N_SEEDS directly, or
+use the CLI overrides.
 
 Example:
     python run_sweep.py --dry-run
@@ -28,21 +29,19 @@ from pathlib import Path
 
 CIRCUITS = ["weak_random", "qaoa_maxcut", "w_state", "qft", "hw_efficient_ansatz"]
 
-# Per-circuit qubit sizes. Capped at 8 for now: the injection stage
-# (sa_injection / stochastic_injection / fidelity_driven_injection) calls
-# compute_fidelity's dense Operator computation on the FULL circuit per
-# candidate trial, and that cost scales with the 2^n x 2^n matrix dimension
-# -- a single weak_random run at 12 qubits (16x the matrix size of 8 qubits)
-# was still running after 1h45m and was killed rather than let finish.
-# Raise these once that scaling problem is actually addressed (see
-# Final_test/nex_formula's unused SWAP-test approximate-fidelity estimator,
-# flagged in logs.txt as a candidate fix) -- not laptop-tractable today.
+# Per-circuit qubit sizes. Previously capped at 8: the injection stage's
+# dense-Operator fidelity computation was intractable above ~10-12 qubits
+# (a weak_random run at 12 qubits was still running after 1h45m and was
+# killed). Fixed by switching to an MPS-backed Monte-Carlo SWAP-test
+# fidelity above fidelity_exact_threshold (default 10) -- see logs.txt's
+# "FIDELITY-COMPUTATION SCALING FIX" section. Restored to the original
+# larger sizes now that this is unblocked.
 CIRCUIT_QUBIT_SIZES = {
-    "weak_random": [8],
-    "qaoa_maxcut": [8],
-    "w_state": [8],
-    "qft": [8],
-    "hw_efficient_ansatz": [8],
+    "weak_random": [8, 12, 20],
+    "qaoa_maxcut": [8, 12, 16],
+    "w_state": [8, 12, 16],
+    "qft": [8, 12, 16],
+    "hw_efficient_ansatz": [8, 12, 16],
 }
 
 INJECTION_METHODS = ["stochastic", "sa"]
@@ -51,12 +50,22 @@ N_SEEDS = 5  # roadmap ultimately wants 10-20 seeds per config for review
 GENERATIONS = 100
 POP_SIZE = 100
 
+# Above this many qubits, sa_injection's default sa_iters=3000 costs real wall-clock per
+# iteration via the approximate fidelity backend (measured: ~21.6 min at n=12 vs. ~9.1 min
+# for stochastic, which is also the actual floor -- the always-on greedy fidelity_driven_injection
+# pass costs the same either way, and reducing sa_iters to 150 made sa's total time converge to
+# stochastic's anyway). Combined with the 8-qubit finding that the greedy pass wins 48/50 runs
+# regardless of injection method, sa isn't worth its extra cost above this size -- dropped
+# from the grid there rather than tuned down further.
+LARGE_N_THRESHOLD = 10
+
 
 def build_grid(circuits, n_qubits_override, injection_methods, n_seeds):
     for circuit in circuits:
         sizes = n_qubits_override if n_qubits_override is not None else CIRCUIT_QUBIT_SIZES[circuit]
         for n_qubits in sizes:
-            for injection_method in injection_methods:
+            methods = [m for m in injection_methods if n_qubits <= LARGE_N_THRESHOLD or m != "sa"]
+            for injection_method in methods:
                 for seed in range(n_seeds):
                     yield {
                         "circuit": circuit,
