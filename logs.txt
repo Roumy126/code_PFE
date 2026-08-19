@@ -1,5 +1,6 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
+Last updated: 2026-08-19 (Phase 1 — experiment infrastructure — completed)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -410,20 +411,59 @@ Phase 0 — foundation (~1-2 weeks) — DONE (2026-08-18, commit 35ed672d)
   aggregator was always slated for Phase 1, since it needs several
   runs to exist first.
 
-Phase 1 — experiment infrastructure (~2-3 weeks) — NOT STARTED
-  - A pandas aggregator that scans runs/*/metrics.json into one master
-    results table (circuit, n_qubits, algorithm, seed, fidelity,
-    depth, gate cost, hypervolume, epsilon, wall-clock) -- the direct
-    source for every paper table/figure.
-  - Automatic multi-seed sweeps (10-20 seeds per config -- a single
-    run's numbers won't survive review), resumable so a laptop can be
-    turned off mid-sweep without losing progress (skip config/seed
-    combos whose runs/ directory already has a metrics.json).
-  - Memoize compute_fidelity / repeated sub-circuit evaluations where
-    chromosomes repeat during GA fitness evaluation.
-  - Stage-level timing (partition / per-block GA / injection /
-    compression) so laptop tuning effort (population size vs.
-    generations) is targeted at the actual bottleneck.
+Phase 1 — experiment infrastructure (~2-3 weeks) — DONE (2026-08-19)
+  Implemented:
+  - Stage-level timing: optimise_circuit_pipeline (M1_finale/final_m1_script.py)
+    now records wall-clock time per stage into
+    meta["stage_timings_s"] = {partitioning, block_optimization,
+    injection, compression}. Flows through into every run's
+    metrics.json automatically (run_experiment.py already serializes
+    the full meta dict) -- no CLI changes needed.
+  - Memoization: optimise_block_nsga2 now dedupes identical chromosomes
+    (keyed on tuple(individual)) before dispatching to joblib.Parallel,
+    via a cache scoped to the function call and living entirely in the
+    parent process -- safe under joblib's default loky (process)
+    backend since workers stay pure functions. Dedup opportunities come
+    from low-probability mate/mutate skips reproducing an already-seen
+    genome, more frequent as a population converges.
+  - Discovered while scoping this: update_rotation_angles ("LAS", the
+    local angle-search step CLAUDE.md describes as following NSGA-II)
+    is defined but never called anywhere in the pipeline -- dead code
+    today. Left unmemoized since optimizing unused code is pure waste;
+    flagged here as a latent gap rather than silently left unexplained.
+  - run_sweep.py (new, repo root): resumable multi-seed sweep runner.
+    Enumerates an (n_qubits x injection_method x seed) grid, runs each
+    combination as its own subprocess (crash isolation; no leftover
+    matplotlib figures / DEAP creator state / joblib worker pools
+    carried across runs), and skips any combination whose
+    runs/<run_id>/metrics.json already exists -- the resumability
+    mechanism, no separate state file needed. run_id encodes every
+    varied parameter (including generations/pop_size) so changing a
+    fixed setting can't silently collide with a stale prior run.
+    Verified: a tiny 4-config grid ran end-to-end, then an identical
+    re-run skipped all 4.
+  - aggregate_results.py (new, repo root): scans runs/*/{config.json,
+    metrics.json} into one pandas DataFrame (config + metrics +
+    per-stage timings + per-block MOO indicator means: mean_hv,
+    mean_spread, mean_spacing, total_n_pareto), written to
+    runs/results_master.csv. Skips (warns, doesn't crash) any run
+    directory missing metrics.json (still running or failed).
+    Verified against the tiny sweep's 4 runs -- fidelity in [0,1],
+    depths/costs non-negative.
+  - tests/test_pipeline_smoke.py: extended with an assertion on the new
+    stage_timings_s field (keys present, all values >= 0).
+  - README.md: added a "Running experiments" section documenting
+    run_experiment.py / run_sweep.py / aggregate_results.py / pytest,
+    and filled in previously-undocumented Project Structure entries
+    (M1_finale/, runs/, tests/) -- these existed since Phase 0 but were
+    never added to the README.
+  Not done from the original Phase 1 sketch: none -- all four listed
+  items (aggregator, sweep runner, memoization, stage timing) are
+  implemented.
+  Out of scope, not touched: M1_finale/final_m1.ipynb (the notebook
+  final_m1_script.py was extracted from) was not updated to mirror
+  these changes, per this project's convention of not auto-syncing
+  duplicated notebook/script pairs without checking first.
 
 Phase 2 — fixed benchmark suite (through November) — NOT STARTED
   - Turn the existing one-off Final_test/ circuits (QAOA, W-state,

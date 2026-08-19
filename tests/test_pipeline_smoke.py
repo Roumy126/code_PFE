@@ -52,3 +52,7 @@ def test_pipeline_runs_end_to_end(tmp_path, monkeypatch):
     assert meta["depth_after"] >= 0
     assert len(meta["blocks"]) >= 2
     assert len(meta["moo_metrics_per_block"]) == len(meta["blocks"])
+    assert set(meta["stage_timings_s"]) == {
+        "partitioning", "block_optimization", "injection", "compression",
+    }
+    assert all(t >= 0 for t in meta["stage_timings_s"].values())

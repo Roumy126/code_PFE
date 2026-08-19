@@ -12,6 +12,7 @@ import copy
 import math
 
 import random
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 from collections import defaultdict
@@ -831,6 +832,24 @@ def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size
         cost = len(ind)  # chromosome length as proxy (fast). Replace by compute_gate_cost(qc) if desired.
         return fid, depth, cost
 
+    fid_cache: Dict[Tuple, Tuple[float, int, int]] = {}
+
+    def evaluate_population(individuals):
+        # Dedupe identical genomes (common once the population converges and
+        # low-probability mate/mutate skips reproduce an already-seen chromosome)
+        # before dispatching to Parallel — cache lives in the parent process only,
+        # so it stays correct under joblib's default process (loky) backend.
+        to_run, seen_keys = [], set()
+        for ind in individuals:
+            key = tuple(ind)
+            if key not in fid_cache and key not in seen_keys:
+                to_run.append(ind)
+                seen_keys.add(key)
+        fresh = Parallel(n_jobs)(delayed(eval_ind)(i) for i in to_run)
+        for ind, fit in zip(to_run, fresh):
+            fid_cache[tuple(ind)] = fit
+        return [fid_cache[tuple(ind)] for ind in individuals]
+
     if not hasattr(creator, "FitnessMulti"):
         creator.create("FitnessMulti", base.Fitness, weights=(1, -1, -1))
         creator.create("Individual", list, fitness=creator.FitnessMulti)
@@ -842,7 +861,7 @@ def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size
     tb.register("select", tools.selNSGA2)
 
     pop = tb.population(pop_size)
-    fits = Parallel(n_jobs)(delayed(eval_ind)(i) for i in pop)
+    fits = evaluate_population(pop)
     for ind, fit in zip(pop, fits):
         ind.fitness.values = fit
     hist_eps = [1 - max(pop, key=lambda i: i.fitness.values[0]).fitness.values[0]]
@@ -858,7 +877,7 @@ def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size
             if random.random() < 0.9:
                 tb.mutate(ind); del ind.fitness.values
         invalid = [i for i in offspring if not i.fitness.valid]
-        fits = Parallel(n_jobs)(delayed(eval_ind)(i) for i in invalid)
+        fits = evaluate_population(invalid)
         for ind, fit in zip(invalid, fits):
             ind.fitness.values = fit
         pop = tb.select(pop + offspring, k=len(pop))
@@ -1230,6 +1249,7 @@ def optimise_circuit_pipeline(
     cost_orig = compute_gate_cost(qc_orig)
     print(f"💰 Cost of the original circuit (Lee et al. 2006): {cost_orig}")
     # 1) Partitioning + graph
+    t_partitioning_start = time.perf_counter()
     print("\n📌 Partitioning the initial circuit...")
     G = build_interaction_graph(qc)
     original_blocks = louvain_partition(qc)
@@ -1270,7 +1290,9 @@ def optimise_circuit_pipeline(
     nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_weights, font_color='red')
     plt.title("Interaction graph")
     plt.tight_layout(); save_plot("interaction_graph"); plt.close()
+    t_partitioning = time.perf_counter() - t_partitioning_start
     # 3) Intra-block optimization
+    t_block_optimization_start = time.perf_counter()
     block_circuits: List[Tuple[List[int], QuantumCircuit]] = []
     moo_metrics_blocks = []
     for idx, bl in enumerate(original_blocks):
@@ -1293,6 +1315,7 @@ def optimise_circuit_pipeline(
         print(best.draw(output="text"))
         block_circuits.append((sorted(list(bl)), best))
         best.draw('mpl', filename=f"optimized_block_{idx}_circuit.png", style='mpl', fold=1)
+    t_block_optimization = time.perf_counter() - t_block_optimization_start
     # 4) Recomposition of the global circuit from the optimized blocks
     qc_rebuilt_original_qubits = QuantumCircuit(qc.num_qubits)
     for qubits_list, cir in block_circuits:
@@ -1314,6 +1337,7 @@ def optimise_circuit_pipeline(
     print("\nRecomposed circuit with inter-block gates:")
     print(qc_rebuilt_original_qubits.draw(output="text"))
     # 5) Inter-block injection (method of choice)
+    t_injection_start = time.perf_counter()
     if injection_method == "sa":
         qc_inj, kept = sa_injection(qc_rebuilt_original_qubits, original_blocks, fid_threshold=fid_threshold,
                                     n_iters=sa_iters, seed=sa_seed)
@@ -1336,7 +1360,9 @@ def optimise_circuit_pipeline(
     print(f"# inter-block gates retained: {len(kept1)}")
     fid_i = compute_fidelity(qc_i, U_orig)
     print(f"Fidelity after inter-block injection <-> original: {fid_i:.5f}")
+    t_injection = time.perf_counter() - t_injection_start
     # 7) Final compression (choose the best base)
+    t_compression_start = time.perf_counter()
     if fid_i > fid_inj:
         qc_opt = compress_custom(qiskit_opt_pass(qc_i))
     else:
@@ -1346,6 +1372,7 @@ def optimise_circuit_pipeline(
     qc_opt.draw('mpl', filename=f"final_optimized_circuit.png", style='mpl', fold=1)
     cost_final = compute_gate_cost(qc_opt)
     print(f"💰 Cost of the final optimized circuit (Lee et al. 2006): {cost_final}")
+    t_compression = time.perf_counter() - t_compression_start
     # 8) Summary
     fid_final = compute_fidelity(qc_opt, U_orig)
     depth_before = qc_orig.depth()
@@ -1366,6 +1393,12 @@ def optimise_circuit_pipeline(
         "original_num_qubits": qc_orig.num_qubits,
         "final_num_qubits": qc_opt.num_qubits,
         "highly_interactive_qubits_identified": highly_interactive_qubits,
+        "stage_timings_s": {
+            "partitioning": t_partitioning,
+            "block_optimization": t_block_optimization,
+            "injection": t_injection,
+            "compression": t_compression,
+        },
         "cost_before": cost_orig,
         "cost_after": cost_final,
         "moo_metrics_per_block": moo_metrics_blocks
