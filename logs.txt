@@ -1,6 +1,7 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-19 (Phase 1 — experiment infrastructure — completed)
+Last updated: 2026-08-19 (Phase 1 — experiment infrastructure — completed;
+Phase 2 circuit generators — completed, benchmark comparisons still pending)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -465,14 +466,64 @@ Phase 1 — experiment infrastructure (~2-3 weeks) — DONE (2026-08-19)
   these changes, per this project's convention of not auto-syncing
   duplicated notebook/script pairs without checking first.
 
-Phase 2 — fixed benchmark suite (through November) — NOT STARTED
-  - Turn the existing one-off Final_test/ circuits (QAOA, W-state,
-    QFT, MaxCut, VQE) into reusable generator functions callable from
-    run_experiment.py (alongside random_weakly_connected_circuit,
-    already wired in as CIRCUIT_GENERATORS["weak_random"]), sized to
-    stay under (or deliberately probe) the 15-qubit fidelity cap.
-  - Run whatever comparisons the paper ends up needing across this
-    fixed benchmark set x seeds, using the Phase 0/1 infrastructure.
+Phase 2 — fixed benchmark suite (through November) — PARTIALLY DONE (2026-08-19)
+  Implemented (circuit generators):
+  - Surveyed every notebook under Final_test/ and final_test_AG/ before
+    writing anything new (two parallel Explore agents). Key finding:
+    the final_test_AG/* notebooks (etatW, qft4, vqe, test2, tryaleatore)
+    don't use optimise_circuit_pipeline at all -- they run an older,
+    fully inlined mono-objective GA. Only their target circuits were
+    worth lifting, not their GA code.
+  - qaoa_maxcut_circuit (M1_finale/final_m1_script.py): generalizes
+    Final_test/3dplot/qaoa's fixed 12-qubit ring+chord MaxCut graph to
+    arbitrary n_qubits (odd n drops the last unmatched chord). gammas/
+    betas default to seeded-random draws instead of the notebook's
+    fixed constants, so multi-seed sweeps actually vary the circuit.
+  - w_state_circuit: generalizes final_test_AG/etatW's fixed 5-qubit
+    ry+cx ladder via its closed-form angle formula
+    (theta_k = 2*arccos(sqrt((n-k)/(n-k+1)))) -- picked over
+    Final_test/wstate's more complex CZ-based 10-qubit construction of
+    the same state, since it was already algebraically parametric.
+  - qft_circuit: uses qiskit's synth_qft_full rather than generalizing
+    final_test_AG/qft4's hand-written 4-qubit h/cp/swap ladder, and
+    rather than qiskit.circuit.library.QFT -- caught via a
+    -W error::DeprecationWarning test run that QFT is deprecated as of
+    Qiskit 2.1 and slated for removal in Qiskit 3.0 (same Qiskit-3.0-
+    proofing concern as the 2026-08-18 dependency audit).
+  - hw_efficient_ansatz_circuit: generalizes final_test_AG/vqe's fixed
+    4-qubit circuit (H layer + ry/rz + linear cx chain). That notebook
+    folder is misnamed -- there's no cost Hamiltonian or optimizer
+    anywhere in it, just a hardware-efficient-style ansatz -- so the
+    generator is named for what it structurally is instead of
+    perpetuating the "VQE" label.
+  - random_weakly_connected_circuit gained a **_ignored so run_experiment.py
+    can pass one uniform kwarg set to every generator.
+  - run_experiment.py: all four wired into CIRCUIT_GENERATORS as
+    "qaoa_maxcut"/"w_state"/"qft"/"hw_efficient_ansatz", plus
+    --qaoa-p/--qaoa-gammas/--qaoa-betas/--ansatz-reps flags.
+  - tests/test_pipeline_smoke.py: one parametrized end-to-end case per
+    new generator. Verified: full suite passes clean under
+    -W error::DeprecationWarning; each generator also run through the
+    real CLI (python run_experiment.py --circuit <name> ...) producing
+    valid metrics.json, then picked up correctly by
+    aggregate_results.py alongside weak_random rows.
+  Not done: "14/64-qubit cases" needed no new work -- they're the same
+  weak_random pattern at larger --n-qubits, already covered.
+  The various fixed 3/5/7/8/10-qubit one-off circuits (CSWAP, the
+  generic hand-written "random" helper, tryaleatore's hardcoded
+  sequence) were left alone -- either already covered by weak_random or
+  too idiosyncratic to be worth generalizing, and not part of the named
+  QAOA/MaxCut/W-state/QFT/VQE set.
+  Not started: running the actual paper-scale comparisons across this
+  benchmark set x seeds (the second Phase 2 bullet) -- that's the
+  natural next step once a research-contribution angle is chosen (see
+  the MOO-algorithm and related-work sections above).
+  Discovered, flagged as a separate future decision, not acted on here:
+  Final_test/nex_formula has an unused SWAP-test-based approximate-
+  fidelity estimator (via qiskit_aer) directly relevant to the still-
+  open "remove the 15-qubit fidelity cap" item (related-work #2/#3
+  above) -- a fidelity-metric change, not a circuit generator, so out
+  of scope for this phase.
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master

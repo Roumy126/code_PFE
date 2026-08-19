@@ -1432,7 +1432,8 @@ def random_weakly_connected_circuit(
     twoq_gates_total: int = 10,   # VERY low number of 2-qubit gates in total
     connectivity_edges: int = 6,  # VERY low connectivity (few possible edges)
     use_cz: bool = True,
-    seed: int = 1234
+    seed: int = 1234,
+    **_ignored,
 ) -> QuantumCircuit:
     """
     Generates a weakly connected random circuit:
@@ -1494,6 +1495,102 @@ def random_weakly_connected_circuit(
                 qc.cx(a, b)
         qc.barrier()
     return qc
+
+
+def qaoa_maxcut_circuit(
+    n_qubits: int = 12,
+    p: int = 2,
+    gammas: Optional[Sequence[float]] = None,
+    betas: Optional[Sequence[float]] = None,
+    seed: int = 0,
+    **_ignored,
+) -> QuantumCircuit:
+    """
+    QAOA circuit for MaxCut on a ring + opposite-chord 3-regular graph
+    (generalizes the notebook's fixed 12-qubit qaoa_maxcut_12qubits to
+    arbitrary n_qubits). For odd n_qubits the last unmatched chord is
+    simply dropped (range(n_qubits // 2) chords for n_qubits ring edges).
+    If gammas/betas aren't given, p values each are drawn from a seeded RNG
+    (gamma in [0.3, 1.5], beta in [0.2, 0.8]) instead of the notebook's
+    fixed constants, so multi-seed sweeps actually vary the circuit.
+    """
+    rng = random.Random(seed)
+    ring_edges = [(i, (i + 1) % n_qubits) for i in range(n_qubits)]
+    chord_edges = [(i, (i + n_qubits // 2) % n_qubits) for i in range(n_qubits // 2)]
+    edges = ring_edges + chord_edges
+
+    if gammas is None:
+        gammas = [rng.uniform(0.3, 1.5) for _ in range(p)]
+    if betas is None:
+        betas = [rng.uniform(0.2, 0.8) for _ in range(p)]
+
+    qc = QuantumCircuit(n_qubits, name=f"QAOA_MaxCut_{n_qubits}q")
+    for q in range(n_qubits):
+        qc.h(q)
+    for layer in range(p):
+        for i, j in edges:
+            qc.rzz(2 * gammas[layer], i, j)
+        for q in range(n_qubits):
+            qc.rx(2 * betas[layer], q)
+    return qc
+
+
+def w_state_circuit(n_qubits: int = 5, seed: int = 0, **_ignored) -> QuantumCircuit:
+    """
+    W-state preparation via a ry+cx ladder (generalizes the notebook's
+    fixed 5-qubit w_state_5qubits: theta_k = 2*arccos(sqrt((n-k)/(n-k+1)))).
+    Deterministic; seed accepted only for CIRCUIT_GENERATORS call-site
+    signature consistency.
+    """
+    qc = QuantumCircuit(n_qubits, name=f"W_state_{n_qubits}q")
+    qc.ry(2 * math.acos(math.sqrt((n_qubits - 1) / n_qubits)), 0)
+    for k in range(1, n_qubits - 1):
+        qc.cx(k - 1, k)
+        qc.ry(2 * math.acos(math.sqrt((n_qubits - k - 1) / (n_qubits - k))), k)
+    qc.cx(n_qubits - 2, n_qubits - 1)
+    return qc
+
+
+from qiskit.synthesis.qft import synth_qft_full
+
+
+def qft_circuit(n_qubits: int = 4, seed: int = 0, **_ignored) -> QuantumCircuit:
+    """
+    Standard QFT via qiskit's own synth_qft_full, replacing the notebook's
+    hand-written 4-qubit h/cp/swap ladder with the library's arbitrary-n
+    equivalent of the same transform (synth_qft_full rather than the older
+    QFT circuit-library class, which is deprecated as of Qiskit 2.1 and
+    slated for removal in Qiskit 3.0). seed unused (deterministic).
+    """
+    qc = synth_qft_full(n_qubits)
+    qc.name = f"QFT_{n_qubits}q"
+    return qc
+
+
+def hw_efficient_ansatz_circuit(
+    n_qubits: int = 4, reps: int = 1, seed: int = 0, **_ignored
+) -> QuantumCircuit:
+    """
+    Generic hardware-efficient-style circuit (H layer, then `reps` x
+    [ry+rz layer, linear cx chain]) generalizing final_test_AG/vqe's fixed
+    4-qubit circuit. Despite that source notebook's folder name, this is
+    not an actual VQE (no cost Hamiltonian, no variational optimization
+    loop) -- named for what it structurally is rather than that label.
+    Angles are seeded-random rather than the notebook's fixed constants,
+    so multi-seed sweeps vary the circuit.
+    """
+    rng = random.Random(seed)
+    qc = QuantumCircuit(n_qubits, name=f"HWEfficientAnsatz_{n_qubits}q")
+    for q in range(n_qubits):
+        qc.h(q)
+    for _ in range(reps):
+        for q in range(n_qubits):
+            qc.ry(rng.uniform(0, 2 * math.pi), q)
+            qc.rz(rng.uniform(0, 2 * math.pi), q)
+        for q in range(n_qubits - 1):
+            qc.cx(q, q + 1)
+    return qc
+
 
 if __name__ == "__main__":
     # --- Generation of the circuit requested by the user ---

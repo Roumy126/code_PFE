@@ -50,6 +50,14 @@ pytest tests/test_pipeline_smoke.py
 # Run a single configuration; writes runs/<run_id>/{config.json,metrics.json,final_circuit.qpy}
 python run_experiment.py --n-qubits 12 --seed 0 --generations 100 --pop-size 100
 
+# --circuit selects the target circuit generator (default: weak_random):
+#   weak_random           random weakly-connected circuit (any size, incl. 14/64-qubit cases)
+#   qaoa_maxcut           QAOA on a ring+chord MaxCut graph (--qaoa-p, --qaoa-gammas, --qaoa-betas)
+#   w_state               W-state preparation (ry+cx ladder)
+#   qft                   Quantum Fourier Transform
+#   hw_efficient_ansatz   generic hardware-efficient ansatz (H + ry/rz + linear cx; --ansatz-reps)
+python run_experiment.py --circuit qaoa_maxcut --n-qubits 8 --qaoa-p 2 --generations 100 --pop-size 100
+
 # Run a resumable multi-seed sweep (edit N_QUBITS/INJECTION_METHODS/N_SEEDS at the top of the
 # file, or override via flags). Re-running the same command skips any run whose
 # runs/<run_id>/metrics.json already exists, so a laptop-scale sweep can be stopped and

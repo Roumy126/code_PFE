@@ -8,9 +8,16 @@ experiment run, not to check numerical optimization quality.
 import random
 
 import numpy as np
+import pytest
 from qiskit import QuantumCircuit
 
-from M1_finale.final_m1_script import optimise_circuit_pipeline
+from M1_finale.final_m1_script import (
+    optimise_circuit_pipeline,
+    qaoa_maxcut_circuit,
+    w_state_circuit,
+    qft_circuit,
+    hw_efficient_ansatz_circuit,
+)
 
 
 def _two_cluster_circuit() -> QuantumCircuit:
@@ -56,3 +63,28 @@ def test_pipeline_runs_end_to_end(tmp_path, monkeypatch):
         "partitioning", "block_optimization", "injection", "compression",
     }
     assert all(t >= 0 for t in meta["stage_timings_s"].values())
+
+
+@pytest.mark.parametrize("make_circuit", [
+    lambda: qaoa_maxcut_circuit(n_qubits=6, p=1, seed=0),
+    lambda: w_state_circuit(n_qubits=5, seed=0),
+    lambda: qft_circuit(n_qubits=4, seed=0),
+    lambda: hw_efficient_ansatz_circuit(n_qubits=4, reps=1, seed=0),
+], ids=["qaoa_maxcut", "w_state", "qft", "hw_efficient_ansatz"])
+def test_benchmark_generators_run_end_to_end(tmp_path, monkeypatch, make_circuit):
+    monkeypatch.chdir(tmp_path)
+    random.seed(0)
+    np.random.seed(0)
+
+    qc = make_circuit()
+    qc_opt, meta = optimise_circuit_pipeline(
+        qc,
+        injection_method="stochastic",
+        fid_threshold=0.9,
+        generations=3,
+        pop_size=8,
+        qubit_duplication_threshold=0.6,
+    )
+
+    assert qc_opt.num_qubits == qc.num_qubits
+    assert 0.0 <= meta["fidelity_final"] <= 1.0 + 1e-6

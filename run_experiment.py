@@ -29,6 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from M1_finale.final_m1_script import (  # noqa: E402
     optimise_circuit_pipeline,
     random_weakly_connected_circuit,
+    qaoa_maxcut_circuit,
+    w_state_circuit,
+    qft_circuit,
+    hw_efficient_ansatz_circuit,
 )
 
 try:
@@ -38,6 +42,10 @@ except ImportError:  # pragma: no cover
 
 CIRCUIT_GENERATORS = {
     "weak_random": random_weakly_connected_circuit,
+    "qaoa_maxcut": qaoa_maxcut_circuit,
+    "w_state": w_state_circuit,
+    "qft": qft_circuit,
+    "hw_efficient_ansatz": hw_efficient_ansatz_circuit,
 }
 
 
@@ -65,6 +73,13 @@ def parse_args(argv=None):
     p.add_argument("--depth", type=int, default=20)
     p.add_argument("--twoq-gates-total", type=int, default=8)
     p.add_argument("--connectivity-edges", type=int, default=5)
+    p.add_argument("--qaoa-p", type=int, default=2, help="QAOA layers (--circuit qaoa_maxcut only).")
+    p.add_argument("--qaoa-gammas", type=float, nargs="+", default=None,
+                    help="QAOA gamma angles, one per layer; random (seeded) if omitted.")
+    p.add_argument("--qaoa-betas", type=float, nargs="+", default=None,
+                    help="QAOA beta angles, one per layer; random (seeded) if omitted.")
+    p.add_argument("--ansatz-reps", type=int, default=1,
+                    help="Repetition layers (--circuit hw_efficient_ansatz only).")
     p.add_argument("--injection-method", choices=["sa", "stochastic"], default="stochastic")
     p.add_argument("--fid-threshold", type=float, default=0.9999)
     p.add_argument("--sa-iters", type=int, default=3000)
@@ -104,6 +119,10 @@ def main(argv=None):
         twoq_gates_total=args.twoq_gates_total,
         connectivity_edges=args.connectivity_edges,
         seed=args.seed,
+        p=args.qaoa_p,
+        gammas=args.qaoa_gammas,
+        betas=args.qaoa_betas,
+        reps=args.ansatz_reps,
     )
 
     # optimise_circuit_pipeline writes figures via relative paths (cwd and
