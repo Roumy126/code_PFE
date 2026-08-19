@@ -29,6 +29,8 @@ CONFIG_FIELDS = [
 METRIC_FIELDS = [
     "fidelity_final", "depth_before", "depth_after", "cost_before",
     "cost_after", "wall_clock_s", "original_num_qubits", "final_num_qubits",
+    "injection_path_used", "fidelity_after_injection_method",
+    "fidelity_after_fidelity_driven_greedy",
 ]
 
 MOO_METRICS = ["HV", "Spread", "Spacing"]

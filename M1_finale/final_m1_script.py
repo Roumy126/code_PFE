@@ -1365,8 +1365,12 @@ def optimise_circuit_pipeline(
     t_compression_start = time.perf_counter()
     if fid_i > fid_inj:
         qc_opt = compress_custom(qiskit_opt_pass(qc_i))
+        injection_path_used = "fidelity_driven_greedy"
+        kept_injections_used = kept1
     else:
         qc_opt = compress_custom(qiskit_opt_pass(qc_inj))
+        injection_path_used = injection_method
+        kept_injections_used = kept
     print("\nFinal optimized circuit:")
     print(qc_opt.draw(output="text"))
     qc_opt.draw('mpl', filename=f"final_optimized_circuit.png", style='mpl', fold=1)
@@ -1386,7 +1390,10 @@ def optimise_circuit_pipeline(
     print(f"💰 Cost of the final circuit:", cost_final)
     meta = {
         "blocks": original_blocks,
-        "kept_injections": kept,
+        "kept_injections": kept_injections_used,
+        "injection_path_used": injection_path_used,
+        "fidelity_after_injection_method": fid_inj,
+        "fidelity_after_fidelity_driven_greedy": fid_i,
         "depth_before": depth_before,
         "depth_after": depth_after,
         "fidelity_final": fid_final,

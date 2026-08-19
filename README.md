@@ -58,18 +58,21 @@ python run_experiment.py --n-qubits 12 --seed 0 --generations 100 --pop-size 100
 #   hw_efficient_ansatz   generic hardware-efficient ansatz (H + ry/rz + linear cx; --ansatz-reps)
 python run_experiment.py --circuit qaoa_maxcut --n-qubits 8 --qaoa-p 2 --generations 100 --pop-size 100
 
-# Run a resumable multi-seed sweep (edit N_QUBITS/INJECTION_METHODS/N_SEEDS at the top of the
+# Run a resumable multi-seed sweep over the fixed benchmark set (5 circuit families x
+# CIRCUIT_QUBIT_SIZES x injection method x seed; edit those constants at the top of the
 # file, or override via flags). Re-running the same command skips any run whose
 # runs/<run_id>/metrics.json already exists, so a laptop-scale sweep can be stopped and
 # resumed without losing progress or duplicating work.
 python run_sweep.py --dry-run              # preview the grid without running anything
-python run_sweep.py --n-seeds 5 --n-qubits 8 12 20
+python run_sweep.py --circuits weak_random qft --n-seeds 5
 
 # Aggregate every completed run under runs/ into one table: runs/results_master.csv
 python aggregate_results.py
 ```
 
-Each run's `metrics.json` includes final fidelity/depth/cost, per-block MOO indicators (hypervolume, spread, spacing), and a `stage_timings_s` breakdown (partitioning / block_optimization / injection / compression) for tuning population size vs. generations on limited compute.
+Each run's `metrics.json` includes final fidelity/depth/cost, per-block MOO indicators (hypervolume, spread, spacing), a `stage_timings_s` breakdown (partitioning / block_optimization / injection / compression), and which injection path actually produced the final circuit (`injection_path_used`, `fidelity_after_injection_method`, `fidelity_after_fidelity_driven_greedy` — the pipeline's greedy fallback pass often wins over the requested `--injection-method`, so these fields tell you which one you actually got).
+
+**Known limitation:** `run_sweep.py`'s benchmark grid is currently capped at 8 qubits per circuit. The injection stage calls `compute_fidelity`'s dense-Operator computation on the full circuit per candidate trial, and that cost scales with the `2^n x 2^n` matrix dimension — a 12-qubit run was observed taking over 1h45m (vs. 30-70s at 8 qubits) and was killed rather than finish. Raising the qubit sizes isn't advisable until that scaling problem is addressed (see `logs.txt`'s Phase 2 section).
 
 ## Project Structure
 - `AG_mono/`: Mono-objective implementations.

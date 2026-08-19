@@ -1,7 +1,10 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
 Last updated: 2026-08-19 (Phase 1 — experiment infrastructure — completed;
-Phase 2 circuit generators — completed, benchmark comparisons still pending)
+Phase 2 circuit generators — completed; Phase 2 8-qubit benchmark sweep —
+completed (50/50 runs), 12+ qubit tiers blocked on the fidelity-computation
+scaling problem discovered during this sweep — see the Phase 2 section
+below for details)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -514,16 +517,67 @@ Phase 2 — fixed benchmark suite (through November) — PARTIALLY DONE (2026-08
   sequence) were left alone -- either already covered by weak_random or
   too idiosyncratic to be worth generalizing, and not part of the named
   QAOA/MaxCut/W-state/QFT/VQE set.
-  Not started: running the actual paper-scale comparisons across this
-  benchmark set x seeds (the second Phase 2 bullet) -- that's the
-  natural next step once a research-contribution angle is chosen (see
-  the MOO-algorithm and related-work sections above).
   Discovered, flagged as a separate future decision, not acted on here:
   Final_test/nex_formula has an unused SWAP-test-based approximate-
   fidelity estimator (via qiskit_aer) directly relevant to the still-
   open "remove the 15-qubit fidelity cap" item (related-work #2/#3
   above) -- a fidelity-metric change, not a circuit generator, so out
   of scope for this phase.
+
+  Second bullet ("run whatever comparisons the paper ends up needing
+  across this fixed benchmark set x seeds") -- baseline sweep run,
+  two real findings, grid rescoped as a result:
+  - run_sweep.py's grid extended with a circuit axis (all 5 generators,
+    not just weak_random). A 20-run baseline (n_qubits=8, 2 seeds, both
+    injection methods) surfaced that fidelity_final, depth_after, and
+    cost_after were bit-identical between injection_method="sa" and
+    "stochastic" in 18/20 cases, despite sa taking 3-6x longer.
+  - Root cause traced to optimise_circuit_pipeline (M1_finale/
+    final_m1_script.py): step 6 (fidelity_driven_injection, a greedy
+    complement pass that ignores injection_method entirely) runs
+    unconditionally after step 5 (sa_injection/stochastic_injection),
+    and the pipeline keeps whichever of the two has higher fidelity.
+    meta["kept_injections"] was always reporting step 5's kept list
+    even when step 6's circuit was the one actually used as qc_opt --
+    an observability bug, not just a confusing coincidence. Fixed:
+    meta now records kept_injections from whichever path actually won,
+    plus new fields injection_path_used, fidelity_after_injection_method,
+    and fidelity_after_fidelity_driven_greedy so this is visible
+    per-run instead of requiring code-reading to explain. Surfaced in
+    aggregate_results.py's master table too.
+  - Re-ran the 20-run baseline with the fix: confirms it quantitatively
+    -- fidelity_driven_greedy won 18/20 (48/50 once the full grid
+    finished, see below), the 2 exceptions being ties where sa/
+    stochastic's own result exactly matched greedy's. Conclusion: at
+    this fidelity regime (raw fidelities 0.006-0.28, nowhere near the
+    0.9999 threshold), sa is currently wasted compute -- it rarely
+    changes the outcome and costs 3-6x more than stochastic for the
+    same result.
+  - Attempted to run the full grid (150 configs: 5 circuits x
+    {8,12,16 or 20}q x 2 injection methods x 5 seeds) as-is. A single
+    weak_random run at 12 qubits was still running after 1h45m (vs.
+    30-70s for the same circuit at 8 qubits) and was killed rather
+    than let finish. Root cause: the injection stage (sa_injection /
+    stochastic_injection / fidelity_driven_injection) calls
+    compute_fidelity's dense Operator computation on the FULL circuit
+    per candidate trial (up to 300 trials for the greedy pass alone,
+    3000 SA iterations for sa) -- cost scales with the 2^n x 2^n matrix
+    dimension, so 8 -> 12 qubits is a 16x bigger matrix and a much
+    larger-than-16x runtime increase per fidelity check. This is the
+    same scaling problem the "remove the 15-qubit fidelity cap"
+    related-work item (#2/#3, and nex_formula's unused SWAP-test
+    estimator) is about -- confirmed here as a real, currently-blocking
+    cost, not just a theoretical concern.
+  - Grid rescoped to 8 qubits only for all 5 circuits (run_sweep.py's
+    CIRCUIT_QUBIT_SIZES) until that scaling problem is actually
+    addressed. Completed: all 50 configs (5 circuits x 8q x 2 injection
+    methods x 5 seeds) ran successfully; runs/results_master.csv now
+    holds a real (not tiny-smoke) dataset confirming the injection-path
+    finding at full seed count (48/50 fidelity_driven_greedy).
+  Not started: 12/16/20-qubit tiers of the benchmark set (blocked on
+  the fidelity-scaling problem above) and the actual paper-scale
+  research comparisons (blocked on choosing a research-contribution
+  angle -- see the MOO-algorithm and related-work sections above).
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master
