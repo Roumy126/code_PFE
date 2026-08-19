@@ -63,6 +63,33 @@ def test_pipeline_runs_end_to_end(tmp_path, monkeypatch):
         "partitioning", "block_optimization", "injection", "compression",
     }
     assert all(t >= 0 for t in meta["stage_timings_s"].values())
+    assert meta["fidelity_backend"] == "exact"  # 6 qubits <= default fidelity_exact_threshold=10
+
+
+def test_pipeline_runs_end_to_end_via_approximate_fidelity(tmp_path, monkeypatch):
+    # Forces the Monte-Carlo SWAP-test path (fidelity_exact_threshold below the circuit's own
+    # qubit count) on the same tiny circuit/settings, instead of a bigger real circuit --
+    # exercises the approximate backend without the extra runtime a 12+ qubit case would add.
+    monkeypatch.chdir(tmp_path)
+    random.seed(0)
+    np.random.seed(0)
+
+    qc = _two_cluster_circuit()
+    qc_opt, meta = optimise_circuit_pipeline(
+        qc,
+        injection_method="stochastic",
+        fid_threshold=0.9,
+        generations=3,
+        pop_size=8,
+        qubit_duplication_threshold=0.6,
+        fidelity_exact_threshold=2,
+        fidelity_samples=2,
+        fidelity_shots=32,
+    )
+
+    assert qc_opt.num_qubits == qc.num_qubits
+    assert 0.0 <= meta["fidelity_final"] <= 1.0 + 1e-6
+    assert meta["fidelity_backend"] == "swap_test_mc"
 
 
 @pytest.mark.parametrize("make_circuit", [

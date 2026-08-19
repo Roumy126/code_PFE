@@ -2,9 +2,10 @@ PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
 Last updated: 2026-08-19 (Phase 1 — experiment infrastructure — completed;
 Phase 2 circuit generators — completed; Phase 2 8-qubit benchmark sweep —
-completed (50/50 runs), 12+ qubit tiers blocked on the fidelity-computation
-scaling problem discovered during this sweep — see the Phase 2 section
-below for details)
+completed (50/50 runs); the fidelity-computation scaling problem that
+blocked 12+ qubit tiers is now FIXED — see "FIDELITY-COMPUTATION SCALING
+FIX" section below — though the larger-qubit sweep itself hasn't been
+re-run yet)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -274,6 +275,11 @@ applies to this specific codebase, not just in general.
    - Source: arXiv 2506.09963
 
 2. Cheaper fidelity proxy to replace the hard 15-qubit cutoff
+   [DONE 2026-08-19 -- see "FIDELITY-COMPUTATION SCALING FIX" below.
+   Took a different route than this specific paper's projection-based/
+   NSGA-II-folded approach -- ported and fixed nex_formula's existing
+   SWAP-test estimator instead, switched to matrix_product_state
+   simulation. Net effect is the same: the hard cutoff is gone.]
    - compute_fidelity short-circuits to 1.0 above 15 qubits — a
      "Scalable Multi-Objective Genetic Algorithm for Quantum Circuit
      Optimization" paper targets this exact bottleneck via a
@@ -283,6 +289,11 @@ applies to this specific codebase, not just in general.
      full; preprint mirror was paywalled/403 at research time)
 
 3. Classical-shadow / tensor-network fidelity estimation for scale
+   [DONE 2026-08-19 -- see "FIDELITY-COMPUTATION SCALING FIX" below.
+   Not classical-shadow tomography specifically, but the same
+   tensor-network idea: matrix_product_state simulation of a SWAP-test
+   circuit, which is what actually made this tractable past 15 qubits
+   for this project's weakly-connected circuits.]
    - Tensor-network-backed classical shadow tomography gives
      sample-efficient fidelity/property estimation without building
      the full 2^n x 2^n operator — would let the pipeline's scaling
@@ -574,10 +585,123 @@ Phase 2 — fixed benchmark suite (through November) — PARTIALLY DONE (2026-08
     methods x 5 seeds) ran successfully; runs/results_master.csv now
     holds a real (not tiny-smoke) dataset confirming the injection-path
     finding at full seed count (48/50 fidelity_driven_greedy).
-  Not started: 12/16/20-qubit tiers of the benchmark set (blocked on
-  the fidelity-scaling problem above) and the actual paper-scale
-  research comparisons (blocked on choosing a research-contribution
-  angle -- see the MOO-algorithm and related-work sections above).
+  Not started: the actual paper-scale research comparisons (blocked on
+  choosing a research-contribution angle -- see the MOO-algorithm and
+  related-work sections above). The 12/16/20-qubit tiers were blocked
+  on the fidelity-scaling problem -- see below, now fixed.
+
+=====================================================================
+FIDELITY-COMPUTATION SCALING FIX (2026-08-19)
+=====================================================================
+Addresses the blocker Phase 2's benchmark sweep hit (a 12-qubit
+weak_random run still running after 1h45m, killed rather than let
+finish) and delivers related-work item #3 above (tensor-network-backed
+fidelity estimation past the 15-qubit cutoff) -- turned out to overlap
+heavily with item #2 as well, since the same fix removes the hard
+cutoff entirely rather than just extending it.
+
+Root cause: compute_fidelity computes a dense Operator trace fidelity,
+and injection-stage functions call it on the FULL recomposed circuit
+hundreds to thousands of times per run -- _sa_energy once per SA
+iteration (default sa_iters=3000), fidelity_driven_injection twice per
+trial (default max_trials=300 -> 600 calls), plus stochastic_injection
+and optimise_circuit_pipeline's own summary checks. Cost scales with
+the 2^n x 2^n matrix dimension: 8 -> 12 qubits is a 16x bigger matrix
+and a much-larger-than-16x runtime increase per call.
+
+Final_test/nex_formula already had an approximate-fidelity estimator
+(safe_fidelity_between_circuits: exact below a qubit threshold,
+Monte-Carlo SWAP-test above it) sitting unused for exactly this.
+Before integrating it, ported it standalone and validated it directly
+-- found it silently BROKEN: _swap_test_circuit builds
+QuantumCircuit(total, 1) (an implicit classical register) and then
+adds a SECOND ClassicalRegister for the actual measurement, so
+get_counts() returns two-register keys like '0 0', but the code checks
+counts.get('0', ...), which never matches -- every estimate silently
+returned 0.0, including for identical circuits (which must be ~1.0).
+Fixed (single classical register, no implicit extra bit) and confirmed
+against exact fidelity on test cases before trusting it further.
+
+Also discovered mid-validation, changing the plan materially: the
+SWAP-test circuit itself has 2n+1 qubits, so Aer's DEFAULT simulation
+method is exponential in THAT, not just in n -- outright rejected
+above 31 total qubits (CircuitTooWideForTarget) and would be
+infeasible around n=15 even where it "works". Tested
+AerSimulator(method="matrix_product_state") directly against a
+20-qubit weakly-connected target (41-qubit SWAP-test circuit): no
+qubit-count-driven slowdown at all (n=8/12/16 all ~0.06-0.08s at 512
+shots) -- cost is dominated almost entirely by shots (linear:
+64->0.4s, 512->2.4s, 2048->9.6s per sample), not qubit count, because
+this project's circuits are weakly-connected/low-entanglement by
+design. MPS, not the default method, is what actually makes this scale
+for the circuits this pipeline targets.
+
+Implemented in M1_finale/final_m1_script.py:
+- safe_fidelity_between_circuits(qc_a, qc_b, exact_threshold=10,
+  samples=8, shots=128, seed=0) plus helpers (_rand_product_prep,
+  _swap_test_circuit, approximate_gate_fidelity_swap_mc), ported from
+  nex_formula with the classical-register bug fixed and hardcoded to
+  AerSimulator(method="matrix_product_state") -- never the default
+  method. Defaults lower than nex_formula's (threshold 12->10, samples
+  32->8, shots 2048->128) based on the measured ~0.0046s/shot cost.
+- optimise_circuit_pipeline: dropped the "if n<=15: build dense Operator
+  else: dummy identity" special case entirely -- qc_orig (the actual
+  circuit) is always cheap to keep regardless of size, which is what
+  the new function needs instead of a prebuilt matrix. All 5
+  full-circuit fidelity checks (fid_rebuilt, fid_rebuilt1, fid_inj,
+  fid_i, fid_final) now go through safe_fidelity_between_circuits
+  against qc_orig directly.
+- sa_injection/_sa_energy, stochastic_injection,
+  fidelity_driven_injection: switched from precomputed target-unitary
+  matrices to safe_fidelity_between_circuits. Per-block GA
+  (optimise_block_nsga2, update_rotation_angles) and other per-block
+  compute_fidelity call sites are UNCHANGED -- blocks stay at or under
+  max_block_size=5, well within any reasonable exact_threshold, so the
+  existing exact-matrix path there was already correct and efficient.
+- fidelity_driven_injection also stopped recomputing the unchanged
+  side's fidelity every trial (candidate_qc only changes on
+  acceptance) -- halves the fidelity calls in that loop, a direct,
+  in-scope efficiency win for the exact problem being solved.
+- run_experiment.py: new --fidelity-exact-threshold (default 10),
+  --fidelity-swap-samples (default 8), --fidelity-swap-shots (default
+  128) CLI flags.
+- meta["fidelity_backend"] ("exact" or "swap_test_mc") plus the
+  threshold/samples/shots actually used, now recorded per run and
+  surfaced in aggregate_results.py's master table -- approximate runs
+  carry sampling noise and shouldn't be treated as bit-comparable to
+  exact ones without knowing which path produced them.
+- New tests/test_fidelity_estimator.py: a permanent regression guard
+  for the exact bug found (identical circuits must estimate ~1.0, not
+  silently 0.0), plus an exact-vs-approximate agreement check.
+  tests/test_pipeline_smoke.py extended with a case that forces the
+  approximate path on the existing tiny circuit (fidelity_exact_threshold
+  below its qubit count) rather than needing a slower real 12+ qubit
+  case for the same coverage.
+
+Verified: full test suite passes (10/10). The exact 12-qubit
+weak_random config that motivated this (sa injection, previously
+1h45m+ before being killed) now completes in 4m32s with tiny GA
+settings, metrics.json correctly showing fidelity_backend:
+"swap_test_mc". An 8-qubit run confirms the exact path is unchanged
+(47s, fidelity_backend: "exact") -- no regression for the existing
+50-run 8-qubit benchmark dataset, which aggregate_results.py still
+reads correctly despite the schema difference (old runs simply lack
+the new fields).
+
+Disclosed, not solved in this pass (deliberately, to avoid hidden
+magic): sa_injection's default sa_iters=3000 means 3000 fidelity
+calls -- even at a few seconds each above the exact threshold that's
+hours, not the sub-second cost each iteration has today for small
+circuits. --sa-iters remains a manual knob to lower for large-n runs,
+not auto-scaled. The MC SWAP-test is also a proxy over random PRODUCT
+states, not a full-Hilbert-space fidelity -- validated close to exact
+for near-identical circuits, but can be noisier for highly divergent
+ones.
+
+Natural follow-up, not done here: re-running the Phase 2 12/16/20-qubit
+benchmark tiers now that they're actually tractable (run_sweep.py's
+CIRCUIT_QUBIT_SIZES is still capped at [8] per circuit from the Phase 2
+rescoping -- raising it is unblocked but not yet done).
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master

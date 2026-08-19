@@ -83,6 +83,15 @@ def parse_args(argv=None):
     p.add_argument("--injection-method", choices=["sa", "stochastic"], default="stochastic")
     p.add_argument("--fid-threshold", type=float, default=0.9999)
     p.add_argument("--sa-iters", type=int, default=3000)
+    p.add_argument("--fidelity-exact-threshold", type=int, default=10,
+                    help="Circuits with more qubits than this use an approximate Monte-Carlo "
+                         "SWAP-test fidelity instead of the exact dense-Operator computation "
+                         "(which becomes intractable above ~10-12 qubits). Lower sa-iters "
+                         "manually for runs above this threshold -- it isn't auto-scaled.")
+    p.add_argument("--fidelity-swap-samples", type=int, default=8,
+                    help="Random product states averaged per approximate fidelity estimate.")
+    p.add_argument("--fidelity-swap-shots", type=int, default=128,
+                    help="Shots per approximate fidelity sample (dominates its cost, ~0.0046s/shot).")
     p.add_argument("--generations", type=int, default=500)
     p.add_argument("--pop-size", type=int, default=400,
                     help="Must be a multiple of 4 (DEAP's NSGA-II tournament selection requires it).")
@@ -141,6 +150,9 @@ def main(argv=None):
             qubit_duplication_threshold=args.qubit_duplication_threshold,
             generations=args.generations,
             pop_size=args.pop_size,
+            fidelity_exact_threshold=args.fidelity_exact_threshold,
+            fidelity_samples=args.fidelity_swap_samples,
+            fidelity_shots=args.fidelity_swap_shots,
         )
         wall_clock_s = time.perf_counter() - t0
     finally:
