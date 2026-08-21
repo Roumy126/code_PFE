@@ -96,6 +96,10 @@ def parse_args(argv=None):
     p.add_argument("--pop-size", type=int, default=400,
                     help="Must be a multiple of 4 (DEAP's NSGA-II tournament selection requires it).")
     p.add_argument("--qubit-duplication-threshold", type=float, default=0.6)
+    p.add_argument("--n-jobs", type=int, default=-1,
+                    help="Worker processes for per-block NSGA-II fitness evaluation "
+                         "(joblib). -1 uses all cores; lower this to cap CPU/thermal load "
+                         "on laptop-scale runs.")
     p.add_argument("--seed", type=int, default=0,
                     help="Seeds circuit generation, the GA, and inter-block injection for reproducibility.")
     p.add_argument("--runs-dir", default="runs")
@@ -153,6 +157,7 @@ def main(argv=None):
             fidelity_exact_threshold=args.fidelity_exact_threshold,
             fidelity_samples=args.fidelity_swap_samples,
             fidelity_shots=args.fidelity_swap_shots,
+            n_jobs=args.n_jobs,
         )
         wall_clock_s = time.perf_counter() - t0
     finally:

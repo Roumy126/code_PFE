@@ -1361,6 +1361,7 @@ def optimise_circuit_pipeline(
     fidelity_exact_threshold: int = 10,
     fidelity_samples: int = 8,
     fidelity_shots: int = 128,
+    n_jobs: int = -1,
 ) -> Tuple[QuantumCircuit, Dict[str, object]]:
     print("\nOriginal circuit:")
     print(qc.draw(output="text"))
@@ -1427,7 +1428,7 @@ def optimise_circuit_pipeline(
         print(sub.draw(output="text"))
         sub.draw('mpl', filename=f"block_{idx}_circuit_original.png", style='mpl', fold=1)
         print("  → NSGA-II optimization in progress...")
-        best, hist_moo = optimise_block_nsga2(sub, generations=generations, pop_size=pop_size)
+        best, hist_moo = optimise_block_nsga2(sub, generations=generations, pop_size=pop_size, n_jobs=n_jobs)
         moo_metrics_blocks.append(hist_moo[-1] if hist_moo else {})
         plot_moo_history(hist_moo, title=f"Evolution MoO - Block {idx}", save_as=f"moo_evolution_block_{idx}.png")
         export_all_indicators(hist_moo, idx)
