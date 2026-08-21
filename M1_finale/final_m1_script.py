@@ -896,7 +896,7 @@ def update_rotation_angles(
 # In[ ]:
 
 
-def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size=300, n_jobs=-1, P_star=None):
+def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size=300, P_star=None):
     nq = qc_target.num_qubits; U_target = Operator(qc_target).data
     gate_pool = ["h", "x", "y", "z", "rx", "ry", "rz"]
     if nq >= 2:
@@ -946,7 +946,10 @@ def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size
             if key not in fid_cache and key not in seen_keys:
                 to_run.append(ind)
                 seen_keys.add(key)
-        fresh = Parallel(n_jobs)(delayed(eval_ind)(i) for i in to_run)
+        # Full parallelism (-1 = all cores) is intentional here, not a placeholder to
+        # tune down. The runtime hardware's own thermal safety mechanisms handle CPU
+        # protection; this software does not need to cap or throttle usage itself.
+        fresh = Parallel(-1)(delayed(eval_ind)(i) for i in to_run)
         for ind, fit in zip(to_run, fresh):
             fid_cache[tuple(ind)] = fit
         return [fid_cache[tuple(ind)] for ind in individuals]
@@ -1361,7 +1364,6 @@ def optimise_circuit_pipeline(
     fidelity_exact_threshold: int = 10,
     fidelity_samples: int = 8,
     fidelity_shots: int = 128,
-    n_jobs: int = -1,
 ) -> Tuple[QuantumCircuit, Dict[str, object]]:
     print("\nOriginal circuit:")
     print(qc.draw(output="text"))
@@ -1428,7 +1430,7 @@ def optimise_circuit_pipeline(
         print(sub.draw(output="text"))
         sub.draw('mpl', filename=f"block_{idx}_circuit_original.png", style='mpl', fold=1)
         print("  → NSGA-II optimization in progress...")
-        best, hist_moo = optimise_block_nsga2(sub, generations=generations, pop_size=pop_size, n_jobs=n_jobs)
+        best, hist_moo = optimise_block_nsga2(sub, generations=generations, pop_size=pop_size)
         moo_metrics_blocks.append(hist_moo[-1] if hist_moo else {})
         plot_moo_history(hist_moo, title=f"Evolution MoO - Block {idx}", save_as=f"moo_evolution_block_{idx}.png")
         export_all_indicators(hist_moo, idx)

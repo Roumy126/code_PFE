@@ -1,13 +1,7 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-21 (attempted to resume the remaining 12/16/20-qubit
-sweep tiers from 2026-08-19 (56/100 configs done); repeatedly hit critical
-CPU temperatures on the laptop running it and had to abort each attempt —
-see "THERMAL SAFETY / PROCESS CLEANUP" section below. Sweep is currently
-PAUSED at 56/100 configs, not resumed, pending either a cooling fix on this
-machine or moving remaining runs elsewhere. run_sweep.py now has real
---n-jobs/--blas-threads throttling and process-group cleanup, but neither
-raises what this laptop's cooling can actually sustain.)
+Last updated: 2026-08-19 (56/100 configs done in the 12/16/20-qubit sweep;
+remaining 44 configs not yet run)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -734,94 +728,6 @@ Natural follow-up, not done here: re-running the Phase 2 12/16/20-qubit
 benchmark tiers now that they're actually tractable (run_sweep.py's
 CIRCUIT_QUBIT_SIZES is still capped at [8] per circuit from the Phase 2
 rescoping -- raising it is unblocked but not yet done).
-
-=====================================================================
-THERMAL SAFETY / PROCESS CLEANUP (2026-08-21)
-=====================================================================
-Attempted to resume the remaining 50 configs of the 12/16/20-qubit sweep
-(56/100 total done as of this session, all at 8q plus 6 more since the
-2026-08-19 pause). Resuming via `python run_sweep.py` alone was fine
-functionally (skip-if-done logic worked as expected), but the very next
-unstarted config (weak_random, 20 qubits, stochastic injection) repeatedly
-drove the laptop running it to critical CPU temperature (98-100C, the
-package's crit threshold) within roughly an hour of wall-clock -- and, on
-a later attempt, within ~45 SECONDS of active computation. Three real
-problems found and fixed along the way, not just "the run is slow":
-
-1. optimise_circuit_pipeline had no way to cap parallelism at all.
-   optimise_block_nsga2's joblib.Parallel call for per-block fitness
-   evaluation was hardcoded to n_jobs=-1 (all cores) with no parameter to
-   override it -- optimise_circuit_pipeline didn't even accept an n_jobs
-   argument to pass through. Fixed: added n_jobs: int = -1 to
-   optimise_circuit_pipeline (M1_finale/final_m1_script.py), threaded into
-   its optimise_block_nsga2 call; added --n-jobs to run_experiment.py's
-   CLI, passed to optimise_circuit_pipeline; added --n-jobs to
-   run_sweep.py, passed through to every run_experiment.py subprocess it
-   launches. Verified: a real run with --n-jobs 4 spawned exactly 4 loky
-   worker processes, and the full smoke test suite (6/6) still passes with
-   the new parameter threaded through.
-
-2. --n-jobs alone did not actually bound CPU load, and the laptop hit 98C
-   even with it set to 4. Root cause: the project's numpy is built against
-   OpenBLAS (MAX_THREADS=64), which spins up its own thread pool
-   independently inside EVERY joblib worker process, sized to every core
-   the process can see -- so 4 joblib processes x N BLAS threads each is a
-   multiplicative blowup, not a 4-core cap. Confirmed via a direct process-
-   tree inspection (ps showing 4 LokyProcess workers each near 76% CPU,
-   ~345% total on a 20-logical-core machine) while temperature was still
-   climbing toward the crit threshold. Fixed: run_sweep.py now accepts
-   --blas-threads (default 1), setting OMP_NUM_THREADS/
-   OPENBLAS_NUM_THREADS/MKL_NUM_THREADS/NUMEXPR_NUM_THREADS/
-   VECLIB_MAXIMUM_THREADS as env vars on every subprocess it launches --
-   this is the knob that actually bounds total CPU load, not --n-jobs by
-   itself.
-
-3. Every previous attempt to stop the sweep (`pkill -f run_sweep.py` /
-   `pkill -f run_experiment.py`) silently left orphaned worker processes
-   running and still consuming CPU. Root cause: joblib/loky worker
-   processes run as `python -m joblib.externals.loky.backend.
-   popen_loky_posix ...` -- their command line never contains
-   "run_experiment.py" or "run_sweep.py", so pkill-by-name on either
-   parent's name never matches them. Confirmed directly: after killing a
-   sweep run by name and reporting (incorrectly, at the time) "no orphaned
-   processes," a later process-tree check found 8 leftover loky/
-   resource_tracker processes from that earlier kill still alive and
-   burning CPU. Fixed: run_sweep.py now launches each run_experiment.py
-   subprocess with start_new_session=True (its own process group,
-   inherited by every worker it forks/spawns), tracks that group's pgid,
-   and installs SIGTERM/SIGINT handlers plus a try/finally around the
-   subprocess wait so ANY way the sweep is stopped -- Ctrl+C, an external
-   kill/pkill, or a config finishing normally -- tears down the whole
-   group (SIGTERM, escalating to SIGKILL after a 5s grace period), not
-   just the direct child. Verified live: launched a real weak_random/20q
-   run through the throttled sweep, confirmed via `ps -eo pid,ppid,pgid`
-   that all 4 loky workers shared the subprocess's process group, sent
-   SIGTERM to run_sweep.py itself, and confirmed zero orphaned processes
-   remained afterward (full teardown took ~10-13s, consistent with the 5s
-   grace period being hit before children exited).
-
-Even with both fixes applied (--n-jobs 4 --blas-threads 1, i.e. a genuine
-~4-real-core cap with no BLAS oversubscription), a live test of the exact
-weak_random/20q config still drove the CPU to 100C within ~45 seconds.
-This means the recurring problem was never purely a software
-oversubscription bug -- this laptop's cooling (fan/vents/thermal paste,
-not diagnosed further here) cannot sustain even a modest ~4-core dense
-numerical workload for long. --n-jobs/--blas-threads fix real correctness
-and cleanup bugs (worth keeping regardless), but do not raise the ceiling
-of what this specific machine can run unattended.
-
-Sweep is PAUSED at 56/100 configs (all runs/*/metrics.json intact, no
-partial/corrupt run directories left behind). NOT resumed pending one of:
-  - addressing the laptop's cooling (clean fans/vents, check thermal
-    paste, try a cooling pad) before attempting 12+ qubit configs again,
-  - or moving the remaining 12/16/20-qubit tiers to different hardware
-    (a desktop, a cloud instance, etc.) rather than this laptop.
-If resuming here anyway despite the above: use
-`python run_sweep.py --n-jobs 2 --blas-threads 1` (or lower) and monitor
-temperature actively (`sensors` / `Package id 0`) rather than trusting a
-config-count-based stop condition alone -- a temperature-based watcher
-that polls every 15s still wasn't fast enough to catch the ~45s spike to
-100C found during validation here.
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master

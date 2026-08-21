@@ -30,26 +30,13 @@ import sys
 import time
 from pathlib import Path
 
-# Env vars read by numpy's BLAS backend (OpenBLAS here) and friends at import
-# time. --n-jobs alone only caps joblib's *process* count -- each of those
-# processes independently spins up its own BLAS thread pool across every
-# core it can see, so e.g. --n-jobs 4 on a 20-core machine can still mean
-# 4x oversubscription. Discovered the hard way (2026-08-19/21): a laptop hit
-# its 100C critical threshold within ~45s on a 20-qubit config even with
-# --n-jobs 4, because OpenBLAS was still using all cores per worker.
-_THREAD_CAP_ENV_VARS = (
-    "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
-)
-
 # Tracks the currently-running subprocess's process group so a signal
 # handler (Ctrl+C, or an external `kill`/`pkill run_sweep.py`) can clean it
 # up. Needed because pkill-by-name on run_sweep.py/run_experiment.py's own
 # cmdline does NOT reach joblib/loky worker processes -- their cmdline is
 # "python -m joblib.externals.loky.backend.popen_loky_posix", with no
-# reference to run_experiment.py. Verified in practice (2026-08-21): those
-# workers survived as orphans, still consuming CPU, after the parent was
-# killed by name -- this is what process-group cleanup below fixes.
+# reference to run_experiment.py, so they can otherwise survive as orphans
+# after the parent is killed by name.
 _current_pgid = None
 
 
@@ -151,17 +138,6 @@ def parse_args(argv=None):
                     default=INJECTION_METHODS)
     p.add_argument("--n-seeds", type=int, default=N_SEEDS)
     p.add_argument("--runs-dir", default="runs")
-    p.add_argument("--n-jobs", type=int, default=-1,
-                    help="Passed through to each run_experiment.py subprocess's "
-                         "--n-jobs (joblib worker cap for per-block NSGA-II). "
-                         "-1 uses all cores; lower this for laptop-scale thermal limits. "
-                         "Caps process count only -- combine with --blas-threads, since "
-                         "each process's own BLAS thread pool is a separate multiplier.")
-    p.add_argument("--blas-threads", type=int, default=1,
-                    help="Caps OMP/OPENBLAS/MKL/NUMEXPR/VECLIB thread pools per worker "
-                         "process (default 1). Without this, each joblib worker spawns "
-                         "its own BLAS thread pool across every core it can see, so "
-                         "--n-jobs alone does not bound actual CPU/thermal load.")
     p.add_argument("--dry-run", action="store_true", help="Print the grid and exit.")
     return p.parse_args(argv)
 
@@ -177,10 +153,6 @@ def main(argv=None):
         for cfg in grid:
             print(f"  {run_id_for(cfg)}")
         return 0
-
-    env = os.environ.copy()
-    for var in _THREAD_CAP_ENV_VARS:
-        env[var] = str(args.blas_threads)
 
     n_run, n_skipped, n_failed = 0, 0, 0
     for cfg in grid:
@@ -200,14 +172,13 @@ def main(argv=None):
             "--generations", str(cfg["generations"]),
             "--pop-size", str(cfg["pop_size"]),
             "--seed", str(cfg["seed"]),
-            "--n-jobs", str(args.n_jobs),
         ]
         print(f"[run]  {run_id}")
         # start_new_session=True makes this subprocess (and every worker it
         # spawns, e.g. joblib/loky) its own process group, so it can be torn
         # down atomically -- pkill-by-name on the parent alone misses loky's
         # own worker processes (see _current_pgid comment above).
-        proc = subprocess.Popen(cmd, env=env, start_new_session=True)
+        proc = subprocess.Popen(cmd, start_new_session=True)
         _current_pgid = os.getpgid(proc.pid)
         try:
             returncode = proc.wait()
