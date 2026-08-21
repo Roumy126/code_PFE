@@ -769,3 +769,96 @@ Minor, not acted on: qiskit-aer is in requirements.txt but the main
 pipeline never imports it -- only one throwaway experiment notebook
 (Final_test/nex_formula/test_formule.ipynb) uses it. Left alone since
 removing it wasn't asked for and that notebook may still matter.
+
+=====================================================================
+INJECTION-STAGE FIDELITY COST FIX (2026-08-21)
+=====================================================================
+Follow-up to the FIDELITY-COMPUTATION SCALING FIX above. That fix removed
+the hard 15-qubit cutoff, but a sweep config (weak_random, 20 qubits,
+stochastic injection) still ran for over an hour without completing --
+this section covers root-causing and mitigating that.
+
+Root cause: safe_fidelity_between_circuits' Monte-Carlo SWAP-test estimator
+was validated (in the fix above) against near-identical, low-entanglement
+circuit pairs and found cheap and roughly qubit-count-independent there.
+But the injection stage's entire job is to test candidates that differ from
+the base circuit by one newly-added CROSS-BLOCK entangling gate (cx/cz/rzz
+spanning two different partition blocks) -- exactly the kind of pair the
+earlier validation never tested. The SWAP-test's cswap ladder has to
+represent that genuine entanglement, which is dramatically more expensive
+for the matrix_product_state simulator than a near-identical pair.
+Measured directly on the actual stalled circuit (20-qubit weak_random,
+comparing the original circuit against a candidate with one extra
+cross-block cx): a single fidelity call at the pipeline's general defaults
+(samples=8, shots=128) exceeded 900s (killed after 15+ min, still running)
+-- versus 11.5s for a same-circuit comparison using the same settings. Every
+one of the ~400 sequential trials in stochastic_injection (100) and the
+always-on fidelity_driven_injection greedy pass (300) hits this expensive
+case, which is why every large-qubit sweep config stalled regardless of the
+thread-oversubscription fix below.
+
+Ruled out first: this is not the old dense-Operator bug (no call path
+builds a dense Operator above fidelity_exact_threshold=10; verified by
+reading every Operator(...)/compute_fidelity call site), and not a hang --
+confirmed via before/after CPU-time deltas that the process was genuinely
+computing throughout, not deadlocked.
+
+Fix: added separate, much cheaper fidelity settings used ONLY inside the
+injection stage's per-trial loop (sa_injection/_sa_energy,
+stochastic_injection, fidelity_driven_injection), distinct from the
+pipeline's general fidelity_samples/fidelity_shots which remain at their
+existing values for the pipeline's own reporting-level checks (fid_rebuilt,
+fid_rebuilt1, fid_inj, fid_i, fid_final -- these run only a handful of times
+per pipeline call, not hundreds, so their accuracy isn't the bottleneck).
+New parameters on optimise_circuit_pipeline: injection_fidelity_samples
+(default 2) and injection_fidelity_shots (default 16), threaded into
+run_experiment.py as --injection-fidelity-samples/--injection-fidelity-shots
+and recorded in metrics.json.
+
+Benchmarked directly on the same hard pair (the actual stalled 20-qubit
+config's circuit + one extra cross-block gate) before settling on defaults:
+  - samples=8, shots=128 (old general default): >900s/call, projects to
+    hours+ for 400 trials -- this is what stalled.
+  - samples=2, shots=16 (new default): 40.5s/call, ~270 min (4.5h) for 400
+    trials -- a real ~22x+ speedup, cost still scales roughly linearly with
+    total shots (not a large fixed floor), but still slow at this qubit
+    count/circuit.
+  - samples=1, shots=8 (most aggressive floor tried): 11.65s/call, ~78 min
+    for 400 trials -- faster, but 8 total measurement shots makes the
+    fidelity estimate driving each greedy accept/reject decision close to
+    meaningless statistical noise.
+Conclusion: reducing samples/shots alone cannot bring this into a fast
+regime without degrading the injection stage's actual accept/reject
+signal into noise -- kept the samples=2/shots=16 default as a genuine,
+measured improvement (not a full solution), and flagged for the user that
+a further fix (e.g. restricting the SWAP-test to the affected qubits/blocks
+rather than the full circuit) would need to replace tuning these two
+knobs further. Not implemented in this pass.
+
+Separately (found and fixed in the same investigation, not what caused
+the multi-hour stalls but a real inefficiency): the injection stage's
+sequential per-trial loop was running with no BLAS thread cap, so every
+small linear-algebra call (compress_custom, qiskit_opt_pass, the fidelity
+check itself) independently spun up a thread pool sized to every core the
+process could see -- 94 threads observed on one process, with wall-clock
+CPU time running at ~16x realtime due to contention, not genuine
+parallelism (actual parallelism for this pipeline comes from joblib's
+process-level fan-out in optimise_block_nsga2, not from each individual
+matrix op competing for every core). Fixed by capping OMP_NUM_THREADS/
+OPENBLAS_NUM_THREADS/MKL_NUM_THREADS/NUMEXPR_NUM_THREADS/
+VECLIB_MAXIMUM_THREADS to 1 via os.environ.setdefault(...) at the top of
+M1_finale/final_m1_script.py, before numpy/qiskit-aer are imported (these
+libraries read the env vars once at init, not per-call). Verified via
+threadpoolctl that every thread pool (numpy's OpenBLAS, scipy's,
+scikit-learn's, and qiskit-aer's own bundled OpenBLAS) reports
+num_threads: 1 after this change; thread count on a live run dropped from
+94 to ~22-43, and CPU time began tracking wall-clock 1:1 instead of ~16:1.
+This cap is a deliberate, permanent default (not a tunable CLI throttle) --
+per instruction, this project's stance is that full process-level
+parallelism (joblib's Parallel(-1)) is intentional and hardware-level
+thermal safety is not something this software needs to manage; this fix is
+about eliminating wasted contention inside a single process, not capping
+overall resource usage.
+
+Verified: full pytest smoke suite (10/10) passes with all of the above
+applied.

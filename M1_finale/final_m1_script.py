@@ -18,6 +18,22 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 from collections import defaultdict
 import os
 
+# Cap each process's BLAS thread pool to 1 *before* numpy/qiskit-aer are imported (these
+# libraries read the env vars below at init time, not on every call). Without this, every
+# linear-algebra call -- including the many small, sequential ones in the injection stage
+# (hundreds of trial fidelity checks) and each joblib worker process spun up for per-block
+# NSGA-II -- independently spawns its own thread pool sized to every core it can see. That
+# is thread oversubscription, not real parallelism: dozens of threads end up contending for
+# the same physical cores, which measurably slows down sequential work rather than speeding
+# it up. Actual parallelism for this pipeline comes from joblib's process-level fan-out
+# (Parallel(-1) in optimise_block_nsga2), not from each individual matrix multiply competing
+# for every core.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+
 # --- Scientific analysis ---
 import numpy as np
 import matplotlib.pyplot as plt
@@ -1364,6 +1380,8 @@ def optimise_circuit_pipeline(
     fidelity_exact_threshold: int = 10,
     fidelity_samples: int = 8,
     fidelity_shots: int = 128,
+    injection_fidelity_samples: int = 2,
+    injection_fidelity_shots: int = 16,
 ) -> Tuple[QuantumCircuit, Dict[str, object]]:
     print("\nOriginal circuit:")
     print(qc.draw(output="text"))
@@ -1375,6 +1393,18 @@ def optimise_circuit_pipeline(
     qc_orig = qc.copy()
     fid_kwargs = dict(exact_threshold=fidelity_exact_threshold, samples=fidelity_samples,
                       shots=fidelity_shots, seed=sa_seed if sa_seed is not None else 0)
+    # The injection stage's per-trial fidelity checks (hundreds of them: n_iters/n_injections/
+    # max_trials) compare circuits that differ by a newly-added CROSS-BLOCK entangling gate --
+    # the SWAP-test's cswap ladder has to represent that real entanglement, which is far more
+    # expensive for the matrix_product_state simulator than the near-identical/low-entanglement
+    # pairs fidelity_samples/fidelity_shots were tuned against (a single such call measured
+    # >900s at the pipeline's general defaults, vs. ~11s for a same-circuit comparison). Use
+    # much cheaper, noisier settings just for these per-trial checks; the handful of
+    # higher-accuracy fid_kwargs checks below (fid_rebuilt, fid_inj, fid_i, fid_final) are
+    # unaffected since they only run a few times per pipeline call, not hundreds.
+    injection_fid_kwargs = dict(fidelity_exact_threshold=fidelity_exact_threshold,
+                                fidelity_samples=injection_fidelity_samples,
+                                fidelity_shots=injection_fidelity_shots)
     cost_orig = compute_gate_cost(qc_orig)
     print(f"💰 Cost of the original circuit (Lee et al. 2006): {cost_orig}")
     # 1) Partitioning + graph
@@ -1470,13 +1500,11 @@ def optimise_circuit_pipeline(
     if injection_method == "sa":
         qc_inj, kept = sa_injection(qc_rebuilt_original_qubits, original_blocks, fid_threshold=fid_threshold,
                                     n_iters=sa_iters, seed=sa_seed,
-                                    fidelity_exact_threshold=fidelity_exact_threshold,
-                                    fidelity_samples=fidelity_samples, fidelity_shots=fidelity_shots)
+                                    **injection_fid_kwargs)
     elif injection_method == "stochastic":
         qc_inj, kept = stochastic_injection(qc_rebuilt_original_qubits, original_blocks, fid_threshold=fid_threshold,
                                             seed=sa_seed,
-                                            fidelity_exact_threshold=fidelity_exact_threshold,
-                                            fidelity_samples=fidelity_samples, fidelity_shots=fidelity_shots)
+                                            **injection_fid_kwargs)
     else:
         raise ValueError('injection_method must be "sa" or "stochastic".')
     print("\nCircuit after inter-block injection:")
@@ -1487,9 +1515,8 @@ def optimise_circuit_pipeline(
     # 6) Fidelity-driven greedy injection (complement)
     qc_i, kept1 = fidelity_driven_injection(base_qc=qc_rebuilt_original_qubits, target_qc=qc_orig,
                                             blocks=original_blocks, max_trials=300, fid_threshold=0.9999,
-                                            fidelity_exact_threshold=fidelity_exact_threshold,
-                                            fidelity_samples=fidelity_samples, fidelity_shots=fidelity_shots,
-                                            fidelity_seed=fid_kwargs["seed"])
+                                            fidelity_seed=fid_kwargs["seed"],
+                                            **injection_fid_kwargs)
     print("\nCircuit after inter-block injection with NSGA2 (greedy):")
     print(qc_i.draw(output="text"))
     qc_i.draw('mpl', filename=f"final_optimized_circuitwithdriveninject.png", style='mpl', fold=1)
@@ -1535,6 +1562,8 @@ def optimise_circuit_pipeline(
         "fidelity_exact_threshold": fidelity_exact_threshold,
         "fidelity_samples": fidelity_samples,
         "fidelity_shots": fidelity_shots,
+        "injection_fidelity_samples": injection_fidelity_samples,
+        "injection_fidelity_shots": injection_fidelity_shots,
         "depth_before": depth_before,
         "depth_after": depth_after,
         "fidelity_final": fid_final,

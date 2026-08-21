@@ -89,9 +89,20 @@ def parse_args(argv=None):
                          "(which becomes intractable above ~10-12 qubits). Lower sa-iters "
                          "manually for runs above this threshold -- it isn't auto-scaled.")
     p.add_argument("--fidelity-swap-samples", type=int, default=8,
-                    help="Random product states averaged per approximate fidelity estimate.")
+                    help="Random product states averaged per approximate fidelity estimate "
+                         "(used for the pipeline's own reporting-level checks, not injection trials).")
     p.add_argument("--fidelity-swap-shots", type=int, default=128,
-                    help="Shots per approximate fidelity sample (dominates its cost, ~0.0046s/shot).")
+                    help="Shots per approximate fidelity sample (dominates its cost, ~0.0046s/shot). "
+                         "Used for the pipeline's own reporting-level checks, not injection trials.")
+    p.add_argument("--injection-fidelity-samples", type=int, default=2,
+                    help="Random product states averaged per fidelity estimate INSIDE the injection "
+                         "stage's per-trial loop (hundreds of calls). Kept far lower than "
+                         "--fidelity-swap-samples because these calls compare circuits that differ by "
+                         "a newly-added cross-block entangling gate, which is much more expensive for "
+                         "the matrix_product_state simulator than the near-identical pairs the general "
+                         "default was tuned against.")
+    p.add_argument("--injection-fidelity-shots", type=int, default=16,
+                    help="Shots per injection-stage fidelity sample. See --injection-fidelity-samples.")
     p.add_argument("--generations", type=int, default=500)
     p.add_argument("--pop-size", type=int, default=400,
                     help="Must be a multiple of 4 (DEAP's NSGA-II tournament selection requires it).")
@@ -153,6 +164,8 @@ def main(argv=None):
             fidelity_exact_threshold=args.fidelity_exact_threshold,
             fidelity_samples=args.fidelity_swap_samples,
             fidelity_shots=args.fidelity_swap_shots,
+            injection_fidelity_samples=args.injection_fidelity_samples,
+            injection_fidelity_shots=args.injection_fidelity_shots,
         )
         wall_clock_s = time.perf_counter() - t0
     finally:
