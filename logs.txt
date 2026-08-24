@@ -1,7 +1,9 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-19 (56/100 configs done in the 12/16/20-qubit sweep;
-remaining 44 configs not yet run)
+Last updated: 2026-08-24 (60/100 configs done in the 12/16/20-qubit sweep;
+paused there after hitting a SWAP-test fidelity blowup on genuinely
+entangled circuits -- see "SWAP-TEST FIDELITY BLOWUP ON GENUINELY
+ENTANGLED CIRCUITS" below; remaining 40 configs not yet run)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -862,3 +864,103 @@ overall resource usage.
 
 Verified: full pytest smoke suite (10/10) passes with all of the above
 applied.
+
+=====================================================================
+SWAP-TEST FIDELITY BLOWUP ON GENUINELY ENTANGLED CIRCUITS (2026-08-24)
+=====================================================================
+Discovered while resuming the Phase 2 12/16/20-qubit sweep (the 44 configs
+left over from 2026-08-21, see that section's "Not started" note). Before
+launching the full remaining batch, timed one real 20-qubit weak_random
+config (stochastic injection, real settings g100/p100): 188.8s end-to-end
+(partitioning 0.3s, block_optimization 112.6s, injection 64.3s) -- looked
+safe, so the remaining 44-config sweep was launched.
+
+It was not safe in general -- only for weak_random. Launched via run_sweep.py
+in the background and checked in on periodically:
+- All 4 remaining weak_random_20q configs completed, but with far more
+  variance than the one timed sample suggested: 149.3s / 1632.7s / 2444.0s /
+  5468.4s (2.5 min to 91 min) for otherwise-identical settings, different
+  only by seed. Root cause (consistent with the 2026-08-21 section):
+  injection-stage cost depends on which specific cross-block gate pair gets
+  tested, not just qubit count -- some seeds' partitions happen to produce
+  cheap pairs, others expensive ones. Not a new bug, just wider variance
+  than one sample revealed.
+- The next config (qaoa_maxcut_12q_stochastic_seed0) then hung: still
+  running after 110+ minutes with zero new output. Diagnosed live via
+  /proc/<pid>/io (wchar/syscw unchanged across a 15s window while CPU stayed
+  pegged at ~100%) -- confirmed it was stuck computing inside a single call,
+  not slowly progressing through many silent trials. Killed (SIGTERM,
+  cleanly; run_sweep.py's per-config subprocess isolation meant the sweep
+  itself just logged it as [fail] and moved on, no manual sweep restart
+  needed). The very next config, qaoa_maxcut_12q_stochastic_seed1, hit the
+  identical signature (same zero-I/O-while-100%-CPU fingerprint, ~51 min in)
+  -- ruling out a one-off fluke tied to seed0's specific random circuit and
+  pointing at something systemic to the qaoa_maxcut circuit family. Also
+  killed.
+
+Root cause, confirmed by direct reproduction (not just inferred from the
+hang): built a synthetic candidate circuit shaped like a real post-
+stochastic_injection output (a lightly-entangled base plus 6 cross-block
+rzz gates, matching the "N gates retained" counts actually seen in the
+sweep log) and timed safe_fidelity_between_circuits against a real
+qaoa_maxcut_circuit(12, p=2) target:
+  - injection_fidelity_samples=2 / shots=16 (the "cheap" defaults added by
+    the 2026-08-21 fix specifically to keep the injection-stage per-trial
+    loop fast): 242.8s for ONE call -- already ~6x worse than that fix's
+    own worst-case benchmark (40.5s, measured only against weak_random
+    circuits).
+  - fidelity_swap_samples=8 / shots=128 (the general/reporting defaults):
+    exceeded a 300s timeout, never returned.
+Mechanism: optimise_circuit_pipeline calls safe_fidelity_between_circuits
+at the general (expensive) settings five times per run purely for reporting
+(fid_rebuilt, fid_rebuilt1, fid_inj, fid_i, fid_final --
+M1_finale/final_m1_script.py lines ~1487/1494/1513/1519-ish/final-summary),
+on the 2026-08-21 fix's assumption that "a handful of calls" wouldn't matter
+even at the pricier settings. That held for weak_random because its target
+circuit is weakly entangled by construction. qaoa_maxcut's target is a real
+QAOA circuit (rzz layers across a ring+chord graph, genuinely entangled) --
+the MPS-backed SWAP-test's cost blows up on genuinely entangled circuit
+PAIRS (candidate structure AND target structure both matter), independent
+of samples/shots. Lowering shots further would not reliably fix this: the
+already-"cheap" injection settings still took 4 minutes in the repro.
+
+Practical implication: this is not a weak_random-specific or seed0-specific
+fluke. w_state, qft, and hw_efficient_ansatz are also "genuinely entangled"
+circuit families (not weakly-connected like weak_random) and are live
+candidates to hit the same wall at 12+ qubits -- untested as of this entry
+since the sweep was paused before reaching them.
+
+Not fixed in this pass -- paused the sweep instead of continuing to
+individually discover and kill hangs. Two follow-ups identified, not done:
+1. Pragmatic/immediate: run_sweep.py has no per-config watchdog timeout --
+   a hung config currently requires manual detection (via /proc/<pid>/io,
+   as done here) and a manual kill before the sweep's own crash-isolation
+   (subprocess-per-config, [fail]-and-continue) can take over. Adding an
+   automatic timeout would let a sweep run unattended through configs like
+   this instead of stalling indefinitely.
+2. Real fix, larger: the underlying gap is that safe_fidelity_between_
+   circuits' MPS SWAP-test is not a robust proxy once either circuit in the
+   pair is genuinely entangled, and the pipeline's 5 general-settings calls
+   were never gated by the same cost awareness as the injection-loop calls.
+   Two independent angles worth considering: (a) restrict the SWAP-test to
+   the affected qubits/blocks instead of the full circuit -- explicitly
+   flagged as unimplemented follow-up in the 2026-08-21 section already;
+   (b) qc_orig is only 12 qubits here, well within compute_fidelity's dense-
+   Operator range -- the approximate path is only being used because
+   fidelity_exact_threshold defaults to 10, not because exact computation is
+   actually intractable at this size. Revisiting the threshold itself (or
+   making the general/reporting calls prefer exact fidelity whenever both
+   circuits are small enough) may be cheaper than fixing the approximation.
+
+Sweep state: paused at the user's request at 60/100 configs done (56 from
+2026-08-19/21 plus the 4 weak_random_20q configs from this session).
+run_sweep.py's resumability (skip any run_id with an existing metrics.json)
+means the remaining 40 configs -- all of qaoa_maxcut/w_state/qft/
+hw_efficient_ansatz at 12q and 16q -- can be resumed later once one of the
+two follow-ups above is in place, without re-running anything already done.
+Stopped cleanly (SIGTERM to run_sweep.py, which tore down the running
+subprocess's process group itself; verified no orphaned run_experiment.py
+or joblib/loky worker processes remained). Partial run directories left
+behind by the two killed configs (PNGs/config.json with no metrics.json)
+were removed so a future resume attempt re-runs them cleanly rather than
+finding stale artifacts.

@@ -1,0 +1,116 @@
+STATUS REPORT
+Quantum Circuit Optimization with Genetic Algorithms (PFE)
+Date: 2026-08-24
+
+=====================================================================
+OBJECTIVE
+=====================================================================
+The goal of this project is to make quantum circuit optimization
+scale to larger circuits than standard methods currently allow.
+
+Given a target quantum circuit, we split it into smaller blocks of
+qubits, then use a genetic algorithm (multi-objective evolutionary
+search) to evolve, for each block, a cheaper and shallower circuit
+that still reproduces the original circuit's behavior with high
+fidelity. The blocks are then reassembled into a full circuit that
+is less costly to run while remaining close to the original.
+
+This targets a practical need in near-term quantum computing:
+today's devices are noisy and have limited qubit connectivity, so
+shallower, cheaper circuits that preserve accuracy are directly
+valuable, and are hard to obtain with standard (non-partitioned,
+single-objective) optimization approaches at scale.
+
+=====================================================================
+CURRENT STATUS
+=====================================================================
+The core optimization pipeline is implemented and working: circuit
+partitioning, per-block evolutionary optimization, reassembly, and
+a re-injection step that restores accuracy lost during partitioning.
+
+Over the past weeks, effort has focused on turning this from a
+research pipeline into something that can reliably produce results
+for a paper on a laptop-only compute budget: reproducible
+experiment runs, automated multi-run sweeps across circuit types and
+problem sizes, and result aggregation for analysis.
+
+A benchmark suite covering several standard quantum circuit types
+(used in quantum chemistry, optimization, and communication
+applications) has been built and is being run at increasing circuit
+sizes to characterize how well the approach scales. This is
+currently in progress; a scaling limitation was identified this week
+for certain circuit types and is being addressed before continuing.
+
+=====================================================================
+NEXT STEPS
+=====================================================================
+- Resolve the scaling limitation found in this week's runs, then
+  complete the benchmark sweep across all target circuit sizes.
+- Decide on and implement the specific research contribution to
+  highlight for the paper (candidates already identified).
+- Move into writing up results, targeting submission around
+  December 2026.
+
+=====================================================================
+IMPLEMENTATION DETAILS
+=====================================================================
+Stack: Qiskit for circuit construction/simulation, DEAP for the
+evolutionary algorithm (NSGA-II / NSGA-III multi-objective search).
+
+Pipeline stages (M1_finale/final_m1_script.py, the reference
+implementation):
+1. Partitioning -- build a qubit interaction graph weighted by
+   2-qubit gate count, split it into blocks via Louvain community
+   detection (or a Metis/Kernighan-Lin alternative for bounded block
+   sizes).
+2. Per-block optimization -- NSGA-II evolves a population of gate
+   sequences per block over three objectives: maximize fidelity,
+   minimize circuit depth, minimize gate-count cost.
+3. Reassembly -- optimized blocks are stitched back into a full
+   circuit in original gate order, preserving the gates that
+   originally crossed block boundaries.
+4. Inter-block gate re-injection -- since block-local optimization
+   loses some cross-block entanglement, two interchangeable
+   strategies (simulated annealing, or greedy fidelity-driven trial-
+   and-keep) re-add cross-block gates that recover fidelity.
+5. Compression -- gate-cancellation/merging passes plus a standard
+   Qiskit transpiler pass.
+Quality is tracked throughout via multi-objective indicators
+(hypervolume, spread, spacing, epsilon indicator) rather than just a
+single best-fitness score.
+
+Fidelity computation (the accuracy metric the whole pipeline
+optimizes against) is the main current engineering challenge.
+Comparing two circuits exactly requires building their full
+2^n x 2^n matrices, which is only tractable up to ~10-12 qubits. Past
+that, we use an approximate Monte-Carlo SWAP-test estimator (circuit-
+based, run under a tensor-network/matrix-product-state simulator)
+instead of the exact computation. This unblocked runs up to 20
+qubits for weakly-connected test circuits, but this week we found it
+becomes very expensive again for circuits with genuine, non-trivial
+entanglement (e.g. QAOA-style circuits), because the tensor-network
+simulator's cost depends on how entangled the circuits being compared
+are, not just on qubit count. This is the scaling limitation
+currently being worked on -- likely fix is to compute the approximate
+fidelity only over the affected qubits/blocks instead of the whole
+circuit, or to prefer the exact computation more often at the
+(still-tractable) sizes currently being benchmarked.
+
+Engineering infrastructure built to support running many experiments
+reliably on laptop hardware:
+- A CLI experiment runner (run_experiment.py) that runs the pipeline
+  once for a given circuit/algorithm configuration and seed, writing
+  its config, metrics, and resulting circuit to an isolated output
+  directory.
+- A resumable multi-seed sweep runner (run_sweep.py) that runs many
+  configurations as isolated subprocesses (so one crashing/hanging
+  run cannot take down the rest) and can be stopped and resumed
+  without re-running completed configurations.
+- A results aggregator (aggregate_results.py) that collects all runs
+  into a single table for analysis and figure generation.
+- A pytest smoke-test suite that catches pipeline-breaking
+  regressions in seconds, before committing to a long run.
+- A fixed benchmark suite of five standard circuit families (random
+  weakly-connected circuits, QAOA MaxCut, W-state preparation, QFT,
+  and a hardware-efficient ansatz) at multiple qubit counts, used to
+  characterize scaling behavior consistently across experiments.
