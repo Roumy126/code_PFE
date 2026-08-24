@@ -1377,11 +1377,12 @@ def optimise_circuit_pipeline(
     qubit_duplication_threshold: float = 0.5,
     generations: int = 500,
     pop_size: int = 400,
-    fidelity_exact_threshold: int = 10,
+    fidelity_exact_threshold: int = 13,
     fidelity_samples: int = 8,
     fidelity_shots: int = 128,
     injection_fidelity_samples: int = 2,
     injection_fidelity_shots: int = 16,
+    injection_fidelity_exact_threshold: int = 12,
 ) -> Tuple[QuantumCircuit, Dict[str, object]]:
     print("\nOriginal circuit:")
     print(qc.draw(output="text"))
@@ -1398,11 +1399,15 @@ def optimise_circuit_pipeline(
     # the SWAP-test's cswap ladder has to represent that real entanglement, which is far more
     # expensive for the matrix_product_state simulator than the near-identical/low-entanglement
     # pairs fidelity_samples/fidelity_shots were tuned against (a single such call measured
-    # >900s at the pipeline's general defaults, vs. ~11s for a same-circuit comparison). Use
-    # much cheaper, noisier settings just for these per-trial checks; the handful of
-    # higher-accuracy fid_kwargs checks below (fid_rebuilt, fid_inj, fid_i, fid_final) are
-    # unaffected since they only run a few times per pipeline call, not hundreds.
-    injection_fid_kwargs = dict(fidelity_exact_threshold=fidelity_exact_threshold,
+    # >900s at the pipeline's general defaults, vs. ~11s for a same-circuit comparison). Below
+    # injection_fidelity_exact_threshold, use exact dense-Operator fidelity instead -- for
+    # genuinely entangled targets (e.g. QAOA) exact is both correct AND faster than the SWAP-test
+    # proxy at these sizes (measured: 25s/call exact vs. 242.8s approximate at n=12 on a real
+    # qaoa_maxcut candidate/target pair -- see "SWAP-TEST FIDELITY BLOWUP" in logs.txt). Kept as
+    # its own (separate, lower) threshold from fidelity_exact_threshold because this loop runs
+    # hundreds of calls, not a handful -- exact cost is fine at n=12 (25s) but not at n=14+
+    # (898s/call measured), so this must not follow the general threshold up that far.
+    injection_fid_kwargs = dict(fidelity_exact_threshold=injection_fidelity_exact_threshold,
                                 fidelity_samples=injection_fidelity_samples,
                                 fidelity_shots=injection_fidelity_shots)
     cost_orig = compute_gate_cost(qc_orig)
@@ -1564,6 +1569,7 @@ def optimise_circuit_pipeline(
         "fidelity_shots": fidelity_shots,
         "injection_fidelity_samples": injection_fidelity_samples,
         "injection_fidelity_shots": injection_fidelity_shots,
+        "injection_fidelity_exact_threshold": injection_fidelity_exact_threshold,
         "depth_before": depth_before,
         "depth_after": depth_after,
         "fidelity_final": fid_final,

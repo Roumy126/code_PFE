@@ -83,11 +83,24 @@ def parse_args(argv=None):
     p.add_argument("--injection-method", choices=["sa", "stochastic"], default="stochastic")
     p.add_argument("--fid-threshold", type=float, default=0.9999)
     p.add_argument("--sa-iters", type=int, default=3000)
-    p.add_argument("--fidelity-exact-threshold", type=int, default=10,
-                    help="Circuits with more qubits than this use an approximate Monte-Carlo "
-                         "SWAP-test fidelity instead of the exact dense-Operator computation "
-                         "(which becomes intractable above ~10-12 qubits). Lower sa-iters "
-                         "manually for runs above this threshold -- it isn't auto-scaled.")
+    p.add_argument("--fidelity-exact-threshold", type=int, default=13,
+                    help="Used for the pipeline's own reporting-level fidelity checks (a handful "
+                         "of calls per run). Circuits with more qubits than this use an "
+                         "approximate Monte-Carlo SWAP-test fidelity instead of the exact "
+                         "dense-Operator computation. Benchmarked on real qaoa_maxcut circuits: "
+                         "exact costs ~25s/call at n=12, ~145s/call at n=13, ~898s/call at n=14 "
+                         "-- 13 is the largest size still cheap enough for ~5 calls/run. Lower "
+                         "sa-iters manually for runs above this threshold -- it isn't auto-scaled.")
+    p.add_argument("--injection-fidelity-exact-threshold", type=int, default=12,
+                    help="Exact-vs-approximate threshold used ONLY inside the injection stage's "
+                         "per-trial loop (hundreds of calls/run) -- kept separate from and lower "
+                         "than --fidelity-exact-threshold since exact cost there compounds over "
+                         "many trials. For genuinely entangled targets (e.g. QAOA) exact is both "
+                         "correct and faster than the SWAP-test proxy at n<=12 (measured: 25s "
+                         "exact vs. 242.8s approximate per call at n=12) -- see the "
+                         "'SWAP-TEST FIDELITY BLOWUP' entry in logs.txt. Not raised to 13/14 "
+                         "because per-call exact cost there (145s/898s) times hundreds of trials "
+                         "is worse than the approximate path it would replace.")
     p.add_argument("--fidelity-swap-samples", type=int, default=8,
                     help="Random product states averaged per approximate fidelity estimate "
                          "(used for the pipeline's own reporting-level checks, not injection trials).")
@@ -166,6 +179,7 @@ def main(argv=None):
             fidelity_shots=args.fidelity_swap_shots,
             injection_fidelity_samples=args.injection_fidelity_samples,
             injection_fidelity_shots=args.injection_fidelity_shots,
+            injection_fidelity_exact_threshold=args.injection_fidelity_exact_threshold,
         )
         wall_clock_s = time.perf_counter() - t0
     finally:

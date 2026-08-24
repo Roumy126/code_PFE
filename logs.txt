@@ -964,3 +964,107 @@ or joblib/loky worker processes remained). Partial run directories left
 behind by the two killed configs (PNGs/config.json with no metrics.json)
 were removed so a future resume attempt re-runs them cleanly rather than
 finding stale artifacts.
+
+=====================================================================
+SWAP-TEST FIX, OPTION (B): PREFER EXACT FIDELITY WHEN TRACTABLE
+(2026-08-24, uncommitted as of this entry)
+=====================================================================
+Implements follow-up (b) from the "SWAP-TEST FIDELITY BLOWUP" section above:
+revisit fidelity_exact_threshold itself rather than trying to fix the
+SWAP-test proxy. Not yet committed -- see "Verification status" below for
+why this is documented as in-progress, not closed out.
+
+Root idea: safe_fidelity_between_circuits' exact path (dense Operator trace
+fidelity) costs depend only on qubit count/gate depth, not on how entangled
+the two circuits are -- unlike the MPS-backed SWAP-test, which blows up
+specifically ON entanglement. So for the qaoa_maxcut/w_state/qft/
+hw_efficient_ansatz families (genuinely entangled by construction), exact
+computation can be cheaper AND more accurate than the approximate proxy at
+sizes previously assumed to need approximation.
+
+Benchmarked directly (M1_finale/final_m1_script.py, single-threaded BLAS,
+two independently-generated qaoa_maxcut_circuit(n, p=2) circuits per n) to
+find where exact stops being worth it:
+  n=10: 1.08s/call,   310MB peak RSS
+  n=12: 25.34s/call,  1.28GB peak RSS
+  n=13: 144.97s/call, 4.36GB peak RSS
+  n=14: 897.81s/call, 16.66GB peak RSS  <- too slow/memory-heavy to use by default
+For comparison, the approximate path on a realistic post-injection candidate
+pair at n=12 measured 242.8s/call in the 2026-08-24 blowup investigation --
+exact is ~10x faster there, and the general-settings approximate call never
+returned within a 300s timeout at n=12 either. Exact clearly wins up to
+n=13; n=14 is where exact itself becomes the bottleneck.
+
+Implemented in M1_finale/final_m1_script.py's optimise_circuit_pipeline:
+- The previously-single fidelity_exact_threshold (default 10, shared by both
+  the pipeline's ~5 general/reporting safe_fidelity_between_circuits calls
+  AND the injection stage's per-trial loop) is now TWO independent
+  parameters:
+  - fidelity_exact_threshold (general/reporting calls only): default raised
+    10 -> 13. Only ~5 calls/run (fid_rebuilt, fid_rebuilt1, fid_inj, fid_i,
+    fid_final), so even n=13's 145s/call costs ~12 min/run total -- an
+    acceptable trade for eliminating the >300s-and-still-hanging approximate
+    behavior these calls hit at 12-13 qubits on entangled targets.
+  - injection_fidelity_exact_threshold (new; injection stage's per-trial
+    loop only): default 12, deliberately NOT raised to 13/14. This loop
+    calls fidelity hundreds of times per run (stochastic_injection's 100
+    trials + the always-on fidelity_driven_injection's 300 trials), so
+    per-call cost compounds -- 25s/call at n=12 is a real but bounded cost
+    (~2-3h worst case for the full injection stage at n=12), while 145s or
+    898s/call times hundreds of trials would be far worse than the
+    approximate path it replaces.
+- meta["injection_fidelity_exact_threshold"] added alongside the existing
+  fidelity_exact_threshold/fidelity_samples/fidelity_shots/
+  injection_fidelity_samples/injection_fidelity_shots fields.
+- run_experiment.py: new --injection-fidelity-exact-threshold CLI flag
+  (default 12, wired into the pipeline call); --fidelity-exact-threshold's
+  default changed 10 -> 13, help text updated with the benchmarked numbers
+  above.
+- aggregate_results.py: injection_fidelity_exact_threshold added to
+  METRIC_FIELDS so it surfaces in runs/results_master.csv (existing runs
+  without the field are handled the same way older schema-missing fields
+  already are -- see the 2026-08-19 fidelity-scaling-fix entry).
+
+Verified: full pytest suite (10/10) passes unchanged with these new
+defaults -- the smoke-test circuits stay well under both new thresholds so
+this doesn't change their behavior, only larger runs'.
+
+Verification status -- NOT fully closed out: a real end-to-end check was
+attempted (python run_experiment.py --circuit qaoa_maxcut --n-qubits 12
+--injection-method stochastic --seed 0 --generations 10 --pop-size 20, the
+exact circuit family/size that hung in the 2026-08-24 blowup investigation).
+Confirmed working as intended for the general/reporting path: fid_rebuilt
+and fid_rebuilt1 (the first two exact calls) returned promptly (0.00024,
+0.00050) instead of hanging past 900s. But the injection stage's per-trial
+loop (now using injection_fidelity_exact_threshold=12, i.e. exact) ran for
+over 2h15m without completing stochastic_injection's 100-trial pass --
+confirmed via /proc/<pid>/io (zero syscall/read/write-byte change across
+both a 15s and a 30s sampling window) that this was genuine, uninterrupted
+CPU-bound computation the whole time (not a deadlock -- CPU time advanced
+exactly with wall-clock in every check), just markedly slower than the
+25s/call isolated benchmark above predicted. Likely cause, not confirmed:
+the REAL circuits compared inside this loop are the block-optimized,
+recomposed circuit (post NSGA-II, post compress_custom/qiskit_opt_pass) --
+not the bare two-fresh-qaoa_maxcut-circuits pair the 25s/call number was
+benchmarked against -- and likely have higher gate count/depth, which is
+what dense-Operator construction cost actually scales with. Killed at the
+user's request (process + wrapper confirmed gone via ps) before reaching a
+conclusive total time, so the actual injection-stage cost at n=12 in
+production conditions is still unmeasured, not just "slower than hoped."
+
+Not done, flagged for next session:
+1. Re-run the same verification (or a cheaper, more targeted benchmark that
+   builds the actual post-block-optimization recomposed circuit directly,
+   rather than a fresh qaoa_maxcut pair) to get a real per-call cost for the
+   injection loop's actual inputs, and a real total wall-clock for one
+   config -- needed before trusting the "~2-3h/config at 12q" estimate this
+   entry's design was based on.
+2. The 16-qubit tier (qaoa_maxcut/w_state/qft/hw_efficient_ansatz at 16q)
+   is untouched by this fix -- exact is infeasible there (2^16 matrix is
+   ~69GB; extrapolating the n=14 timing, likely hours per call too) -- still
+   needs follow-up (a) from the 2026-08-24 blowup section (restrict the
+   SWAP-test to affected qubits/blocks) or must be dropped from the sweep
+   for these circuit families.
+3. Changes in M1_finale/final_m1_script.py, run_experiment.py, and
+   aggregate_results.py are uncommitted as of this entry -- not yet
+   committed to git pending the verification in (1).

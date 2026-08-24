@@ -32,6 +32,7 @@ METRIC_FIELDS = [
     "injection_path_used", "fidelity_after_injection_method",
     "fidelity_after_fidelity_driven_greedy", "fidelity_backend",
     "fidelity_exact_threshold", "fidelity_samples", "fidelity_shots",
+    "injection_fidelity_exact_threshold",
 ]
 
 MOO_METRICS = ["HV", "Spread", "Spacing"]
