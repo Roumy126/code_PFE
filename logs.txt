@@ -745,9 +745,45 @@ with one override flag, fixing injection_method=stochastic throughout
       mutation_scheme -> 3 x 5 x 5 = 75 runs.
   (c) Hybrid LAS ablation: fix block_algorithm/mutation_scheme to the
       prior winners, vary hybrid_las -> 2 x 5 x 5 = 50 runs.
-Total ~175 runs vs. 600+ for a full factorial. Not yet run -- next step
-is to actually execute (a), then (b), then (c) and update
-runs/results_master.csv + this log with findings.
+Total ~175 runs vs. 600+ for a full factorial.
+
+Sweep (a) — algorithm comparison — RUN (2026-08-25): 50/50 runs
+succeeded (`python run_sweep.py --injection-methods stochastic
+--block-algorithms nsga2 smsemoa`), aggregated into
+runs/results_master.csv (now 110 rows total alongside the pre-existing
+61-run 8q baseline). Mean over all 5 circuits x 5 seeds:
+
+  block_algorithm  fidelity_final  depth_after  cost_after  mean_hv  mean_spread  mean_spacing  total_n_pareto  wall_clock_s
+  nsga2                    0.1491        16.04       82.12   0.0520       1.4360        0.0805          121.84       52.41
+  smsemoa                  0.1230        15.20       78.24   0.0596       1.6326        0.0870          171.72       50.95
+
+NSGA-II wins on final (best-individual) fidelity in every circuit
+family, 16/25 seed-runs overall vs. smsemoa's 9/25 (per-circuit: 3-4
+wins out of 5 seeds each, no ties) -- a consistent, not noisy, result.
+But SMS-EMOA produces a larger, more diverse Pareto front per run
+(total_n_pareto 172 vs 122; mean_hv 0.060 vs 0.052) and slightly lower
+depth/cost, at essentially the same wall-clock cost (51s vs 52s mean --
+the earlier single-block timing check's finding, that the hand-rolled
+hypervolume trim isn't a performance blocker, holds at the full
+5-circuit/8-qubit scale too).
+
+Interpretation: at this problem's current fidelity regime (raw
+fidelities well below the 0.9999 threshold, same regime Phase 2 already
+noted for the injection-method finding), SMS-EMOA's hypervolume-driven
+selection trades some peak fidelity for front diversity/coverage --
+consistent with the general MOO literature (SMS-EMOA optimizes the set
+as a whole via the hypervolume indicator, not the single best point on
+one objective). This is itself a legitimate, citable comparison result
+("hypervolume-driven selection improves front diversity/hv at a modest
+cost to peak fidelity, no wall-clock cost") rather than a clear win for
+either algorithm -- worth keeping both in the paper as complementary,
+not picking one as "the" method going into sweeps (b)/(c).
+
+Next: run sweep (b) (mutation ablation) and (c) (hybrid LAS ablation),
+each fixed at nsga2 as block_algorithm (the higher-peak-fidelity choice,
+and the pre-existing/baseline algorithm) per the plan, then revisit
+whether smsemoa should also get its own mutation/LAS ablation pass given
+this "different but not worse" result.
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master
