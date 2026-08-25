@@ -1,9 +1,8 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-24 (60/100 configs done in the 12/16/20-qubit sweep;
-paused there after hitting a SWAP-test fidelity blowup on genuinely
-entangled circuits -- see "SWAP-TEST FIDELITY BLOWUP ON GENUINELY
-ENTANGLED CIRCUITS" below; remaining 40 configs not yet run)
+Last updated: 2026-08-25 (research scope pivoted to a fixed 8-qubit
+benchmark set for now; scaling to larger qubit counts is deferred to a
+later phase -- see "SCALING — DEFERRED" note after Phase 2 below)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -273,11 +272,9 @@ applies to this specific codebase, not just in general.
    - Source: arXiv 2506.09963
 
 2. Cheaper fidelity proxy to replace the hard 15-qubit cutoff
-   [DONE 2026-08-19 -- see "FIDELITY-COMPUTATION SCALING FIX" below.
-   Took a different route than this specific paper's projection-based/
-   NSGA-II-folded approach -- ported and fixed nex_formula's existing
-   SWAP-test estimator instead, switched to matrix_product_state
-   simulation. Net effect is the same: the hard cutoff is gone.]
+   [DEFERRED -- research is proceeding on a fixed 8-qubit benchmark
+   set for now; this item is parked along with the rest of the
+   scaling work. See "SCALING — DEFERRED" after Phase 2 below.]
    - compute_fidelity short-circuits to 1.0 above 15 qubits — a
      "Scalable Multi-Objective Genetic Algorithm for Quantum Circuit
      Optimization" paper targets this exact bottleneck via a
@@ -287,11 +284,8 @@ applies to this specific codebase, not just in general.
      full; preprint mirror was paywalled/403 at research time)
 
 3. Classical-shadow / tensor-network fidelity estimation for scale
-   [DONE 2026-08-19 -- see "FIDELITY-COMPUTATION SCALING FIX" below.
-   Not classical-shadow tomography specifically, but the same
-   tensor-network idea: matrix_product_state simulation of a SWAP-test
-   circuit, which is what actually made this tractable past 15 qubits
-   for this project's weakly-connected circuits.]
+   [DEFERRED -- same as item 2 above, parked with the rest of the
+   scaling work.]
    - Tensor-network-backed classical shadow tomography gives
      sample-efficient fidelity/property estimation without building
      the full 2^n x 2^n operator — would let the pipeline's scaling
@@ -351,11 +345,10 @@ applies to this specific codebase, not just in general.
      cross-block gate count — adding a hardware-error term would make
      block boundaries reflect real device quality, complementing #7.
 
-Suggested priority given effort vs payoff for the thesis:
+Suggested priority given effort vs payoff for the thesis (items 2/3
+deferred along with the rest of the scaling work, see below):
   #4 and #5 (cheap, purely experimental/ablation, no new deps) >
   #1 (partitioning quality, moderate effort) >
-  #2/#3 (removes the 15-qubit ceiling, the project's most-cited
-  limitation, but higher implementation effort) >
   #7/#8 (adds a genuinely new evaluation dimension — hardware realism
   — but requires picking/simulating a device noise model) >
   #6 (biggest potential compression win, but pulls in an external
@@ -528,19 +521,18 @@ Phase 2 — fixed benchmark suite (through November) — PARTIALLY DONE (2026-08
   QAOA/MaxCut/W-state/QFT/VQE set.
   Discovered, flagged as a separate future decision, not acted on here:
   Final_test/nex_formula has an unused SWAP-test-based approximate-
-  fidelity estimator (via qiskit_aer) directly relevant to the still-
-  open "remove the 15-qubit fidelity cap" item (related-work #2/#3
-  above) -- a fidelity-metric change, not a circuit generator, so out
-  of scope for this phase.
+  fidelity estimator (via qiskit_aer) directly relevant to scaling
+  fidelity computation past small circuit sizes -- a fidelity-metric
+  change, not a circuit generator, so out of scope for this phase (and
+  deferred along with the rest of the scaling work, see below).
 
   Second bullet ("run whatever comparisons the paper ends up needing
-  across this fixed benchmark set x seeds") -- baseline sweep run,
-  two real findings, grid rescoped as a result:
-  - run_sweep.py's grid extended with a circuit axis (all 5 generators,
-    not just weak_random). A 20-run baseline (n_qubits=8, 2 seeds, both
-    injection methods) surfaced that fidelity_final, depth_after, and
-    cost_after were bit-identical between injection_method="sa" and
-    "stochastic" in 18/20 cases, despite sa taking 3-6x longer.
+  across this fixed benchmark set x seeds") -- baseline sweep run, one
+  real research finding worth keeping:
+  - A 20-run baseline (n_qubits=8, 2 seeds, both injection methods)
+    surfaced that fidelity_final, depth_after, and cost_after were
+    bit-identical between injection_method="sa" and "stochastic" in
+    18/20 cases, despite sa taking 3-6x longer.
   - Root cause traced to optimise_circuit_pipeline (M1_finale/
     final_m1_script.py): step 6 (fidelity_driven_injection, a greedy
     complement pass that ignores injection_method entirely) runs
@@ -555,181 +547,55 @@ Phase 2 — fixed benchmark suite (through November) — PARTIALLY DONE (2026-08
     per-run instead of requiring code-reading to explain. Surfaced in
     aggregate_results.py's master table too.
   - Re-ran the 20-run baseline with the fix: confirms it quantitatively
-    -- fidelity_driven_greedy won 18/20 (48/50 once the full grid
-    finished, see below), the 2 exceptions being ties where sa/
-    stochastic's own result exactly matched greedy's. Conclusion: at
-    this fidelity regime (raw fidelities 0.006-0.28, nowhere near the
-    0.9999 threshold), sa is currently wasted compute -- it rarely
-    changes the outcome and costs 3-6x more than stochastic for the
-    same result.
-  - Attempted to run the full grid (150 configs: 5 circuits x
-    {8,12,16 or 20}q x 2 injection methods x 5 seeds) as-is. A single
-    weak_random run at 12 qubits was still running after 1h45m (vs.
-    30-70s for the same circuit at 8 qubits) and was killed rather
-    than let finish. Root cause: the injection stage (sa_injection /
-    stochastic_injection / fidelity_driven_injection) calls
-    compute_fidelity's dense Operator computation on the FULL circuit
-    per candidate trial (up to 300 trials for the greedy pass alone,
-    3000 SA iterations for sa) -- cost scales with the 2^n x 2^n matrix
-    dimension, so 8 -> 12 qubits is a 16x bigger matrix and a much
-    larger-than-16x runtime increase per fidelity check. This is the
-    same scaling problem the "remove the 15-qubit fidelity cap"
-    related-work item (#2/#3, and nex_formula's unused SWAP-test
-    estimator) is about -- confirmed here as a real, currently-blocking
-    cost, not just a theoretical concern.
-  - Grid rescoped to 8 qubits only for all 5 circuits (run_sweep.py's
-    CIRCUIT_QUBIT_SIZES) until that scaling problem is actually
-    addressed. Completed: all 50 configs (5 circuits x 8q x 2 injection
-    methods x 5 seeds) ran successfully; runs/results_master.csv now
-    holds a real (not tiny-smoke) dataset confirming the injection-path
+    -- fidelity_driven_greedy won 18/20 (48/50 once the full 8-qubit
+    grid finished), the 2 exceptions being ties where sa/stochastic's
+    own result exactly matched greedy's. Conclusion: at this fidelity
+    regime (raw fidelities 0.006-0.28, nowhere near the 0.9999
+    threshold), sa is currently wasted compute -- it rarely changes the
+    outcome and costs 3-6x more than stochastic for the same result.
+  - Grid scoped to 8 qubits for all 5 circuits (run_sweep.py's
+    CIRCUIT_QUBIT_SIZES): all 50 configs (5 circuits x 8q x 2 injection
+    methods x 5 seeds) ran successfully; runs/results_master.csv holds
+    a real (not tiny-smoke) dataset confirming the injection-path
     finding at full seed count (48/50 fidelity_driven_greedy).
+  Current status: this 8-qubit, 50-run dataset is the basis the
+  research is moving forward on. Larger qubit tiers (12/16/20q) were
+  attempted and repeatedly hit performance walls in the fidelity/
+  injection stages -- deferred rather than continuing to debug them
+  now; see "SCALING — DEFERRED" immediately below.
   Not started: the actual paper-scale research comparisons (blocked on
   choosing a research-contribution angle -- see the MOO-algorithm and
-  related-work sections above). The 12/16/20-qubit tiers were blocked
-  on the fidelity-scaling problem -- see below, now fixed.
-
-  Update (2026-08-19, after the fidelity-scaling fix): restored
-  run_sweep.py's CIRCUIT_QUBIT_SIZES to the original larger sizes
-  (weak_random: 8/12/20, others: 8/12/16). Before launching the full
-  remaining grid, timed real-settings (generations=100, pop_size=100)
-  12-qubit runs to check actual feasibility rather than assume the fix
-  alone was enough:
-  - sa injection, default sa_iters=3000: 1295s (~21.6 min), almost all
-    of it (1242s) in the injection stage.
-  - stochastic injection, defaults: 520s (~8.7 min).
-  - sa injection, sa_iters reduced to 150 (20x cut): 547s (~9.1 min) --
-    converges to almost the same cost as stochastic.
-  Conclusion: the actual fixed cost driver at this scale is the
-  ALWAYS-ON greedy fidelity_driven_injection pass (300 trials,
-  independent of --injection-method), not sa_iters itself -- reducing
-  sa_iters just brings sa down to the same floor stochastic already
-  sits at. Combined with the 8-qubit finding that the greedy pass wins
-  48/50 runs regardless of injection method, sa isn't worth its extra
-  cost above the fidelity exact_threshold -- added LARGE_N_THRESHOLD=10
-  to run_sweep.py's build_grid to drop sa from the grid above that
-  size rather than tune sa_iters down further. Resulting grid: 100
-  configs (50 already done at 8q with both methods, 50 remaining, all
-  stochastic, at 12/16/20q) -- roughly halves the original ~15-17h
-  estimate to ~7.5-8h.
-  Launched the remaining 50-config sweep in the background, then
-  stopped it on request (killed cleanly, no orphaned processes, the
-  one in-progress run's partial directory removed) to continue another
-  day -- run_sweep.py's resumability means re-running the identical
-  command later picks up exactly where this left off, no lost work.
-  Not started: actually finishing this 50-config run (resume tomorrow).
+  related-work sections above).
 
 =====================================================================
-FIDELITY-COMPUTATION SCALING FIX (2026-08-19)
+SCALING — DEFERRED (2026-08-25)
 =====================================================================
-Addresses the blocker Phase 2's benchmark sweep hit (a 12-qubit
-weak_random run still running after 1h45m, killed rather than let
-finish) and delivers related-work item #3 above (tensor-network-backed
-fidelity estimation past the 15-qubit cutoff) -- turned out to overlap
-heavily with item #2 as well, since the same fix removes the hard
-cutoff entirely rather than just extending it.
+Between 2026-08-19 and 2026-08-24, significant effort went into making
+fidelity computation and the inter-block injection stage tractable
+past 8 qubits (replacing the dense-Operator fidelity cutoff with a
+SWAP-test/MPS-based estimator, tuning exact-vs-approximate fidelity
+thresholds, fixing BLAS thread contention, etc.). That work repeatedly
+hit hangs and multi-hour runtimes on genuinely entangled circuit
+families (qaoa_maxcut, w_state, qft, hw_efficient_ansatz) at 12+
+qubits, and was not fully resolved.
 
-Root cause: compute_fidelity computes a dense Operator trace fidelity,
-and injection-stage functions call it on the FULL recomposed circuit
-hundreds to thousands of times per run -- _sa_energy once per SA
-iteration (default sa_iters=3000), fidelity_driven_injection twice per
-trial (default max_trials=300 -> 600 calls), plus stochastic_injection
-and optimise_circuit_pipeline's own summary checks. Cost scales with
-the 2^n x 2^n matrix dimension: 8 -> 12 qubits is a 16x bigger matrix
-and a much-larger-than-16x runtime increase per call.
+Decision: stop spending time on this for now. The research is moving
+forward on the existing 8-qubit dataset (50 runs across all 5 circuit
+families, both injection methods, 5 seeds -- see Phase 2 above), which
+is complete, fast, and has never hit a performance wall. Scaling past
+8 qubits will be revisited later as a separate, dedicated effort.
 
-Final_test/nex_formula already had an approximate-fidelity estimator
-(safe_fidelity_between_circuits: exact below a qubit threshold,
-Monte-Carlo SWAP-test above it) sitting unused for exactly this.
-Before integrating it, ported it standalone and validated it directly
--- found it silently BROKEN: _swap_test_circuit builds
-QuantumCircuit(total, 1) (an implicit classical register) and then
-adds a SECOND ClassicalRegister for the actual measurement, so
-get_counts() returns two-register keys like '0 0', but the code checks
-counts.get('0', ...), which never matches -- every estimate silently
-returned 0.0, including for identical circuits (which must be ~1.0).
-Fixed (single classical register, no implicit extra bit) and confirmed
-against exact fidelity on test cases before trusting it further.
-
-Also discovered mid-validation, changing the plan materially: the
-SWAP-test circuit itself has 2n+1 qubits, so Aer's DEFAULT simulation
-method is exponential in THAT, not just in n -- outright rejected
-above 31 total qubits (CircuitTooWideForTarget) and would be
-infeasible around n=15 even where it "works". Tested
-AerSimulator(method="matrix_product_state") directly against a
-20-qubit weakly-connected target (41-qubit SWAP-test circuit): no
-qubit-count-driven slowdown at all (n=8/12/16 all ~0.06-0.08s at 512
-shots) -- cost is dominated almost entirely by shots (linear:
-64->0.4s, 512->2.4s, 2048->9.6s per sample), not qubit count, because
-this project's circuits are weakly-connected/low-entanglement by
-design. MPS, not the default method, is what actually makes this scale
-for the circuits this pipeline targets.
-
-Implemented in M1_finale/final_m1_script.py:
-- safe_fidelity_between_circuits(qc_a, qc_b, exact_threshold=10,
-  samples=8, shots=128, seed=0) plus helpers (_rand_product_prep,
-  _swap_test_circuit, approximate_gate_fidelity_swap_mc), ported from
-  nex_formula with the classical-register bug fixed and hardcoded to
-  AerSimulator(method="matrix_product_state") -- never the default
-  method. Defaults lower than nex_formula's (threshold 12->10, samples
-  32->8, shots 2048->128) based on the measured ~0.0046s/shot cost.
-- optimise_circuit_pipeline: dropped the "if n<=15: build dense Operator
-  else: dummy identity" special case entirely -- qc_orig (the actual
-  circuit) is always cheap to keep regardless of size, which is what
-  the new function needs instead of a prebuilt matrix. All 5
-  full-circuit fidelity checks (fid_rebuilt, fid_rebuilt1, fid_inj,
-  fid_i, fid_final) now go through safe_fidelity_between_circuits
-  against qc_orig directly.
-- sa_injection/_sa_energy, stochastic_injection,
-  fidelity_driven_injection: switched from precomputed target-unitary
-  matrices to safe_fidelity_between_circuits. Per-block GA
-  (optimise_block_nsga2, update_rotation_angles) and other per-block
-  compute_fidelity call sites are UNCHANGED -- blocks stay at or under
-  max_block_size=5, well within any reasonable exact_threshold, so the
-  existing exact-matrix path there was already correct and efficient.
-- fidelity_driven_injection also stopped recomputing the unchanged
-  side's fidelity every trial (candidate_qc only changes on
-  acceptance) -- halves the fidelity calls in that loop, a direct,
-  in-scope efficiency win for the exact problem being solved.
-- run_experiment.py: new --fidelity-exact-threshold (default 10),
-  --fidelity-swap-samples (default 8), --fidelity-swap-shots (default
-  128) CLI flags.
-- meta["fidelity_backend"] ("exact" or "swap_test_mc") plus the
-  threshold/samples/shots actually used, now recorded per run and
-  surfaced in aggregate_results.py's master table -- approximate runs
-  carry sampling noise and shouldn't be treated as bit-comparable to
-  exact ones without knowing which path produced them.
-- New tests/test_fidelity_estimator.py: a permanent regression guard
-  for the exact bug found (identical circuits must estimate ~1.0, not
-  silently 0.0), plus an exact-vs-approximate agreement check.
-  tests/test_pipeline_smoke.py extended with a case that forces the
-  approximate path on the existing tiny circuit (fidelity_exact_threshold
-  below its qubit count) rather than needing a slower real 12+ qubit
-  case for the same coverage.
-
-Verified: full test suite passes (10/10). The exact 12-qubit
-weak_random config that motivated this (sa injection, previously
-1h45m+ before being killed) now completes in 4m32s with tiny GA
-settings, metrics.json correctly showing fidelity_backend:
-"swap_test_mc". An 8-qubit run confirms the exact path is unchanged
-(47s, fidelity_backend: "exact") -- no regression for the existing
-50-run 8-qubit benchmark dataset, which aggregate_results.py still
-reads correctly despite the schema difference (old runs simply lack
-the new fields).
-
-Disclosed, not solved in this pass (deliberately, to avoid hidden
-magic): sa_injection's default sa_iters=3000 means 3000 fidelity
-calls -- even at a few seconds each above the exact threshold that's
-hours, not the sub-second cost each iteration has today for small
-circuits. --sa-iters remains a manual knob to lower for large-n runs,
-not auto-scaled. The MC SWAP-test is also a proxy over random PRODUCT
-states, not a full-Hilbert-space fidelity -- validated close to exact
-for near-identical circuits, but can be noisier for highly divergent
-ones.
-
-Natural follow-up, not done here: re-running the Phase 2 12/16/20-qubit
-benchmark tiers now that they're actually tractable (run_sweep.py's
-CIRCUIT_QUBIT_SIZES is still capped at [8] per circuit from the Phase 2
-rescoping -- raising it is unblocked but not yet done).
+Note: M1_finale/final_m1_script.py, run_experiment.py, and
+aggregate_results.py still carry code from this scaling work (already
+committed -- e.g. fidelity_exact_threshold=13 / injection_fidelity_
+exact_threshold=12 defaults, the SWAP-test/MPS fidelity backend). Since
+those thresholds are all well above 8 qubits, they don't change
+behavior at the current 8-qubit scope -- left in place rather than
+reverted, but not being built on further for now. run_sweep.py's
+CIRCUIT_QUBIT_SIZES was reset to [8] for every circuit (was still
+defaulting to 12/16/20q, which would have silently resumed the paused
+large-qubit sweep on the next run) -- pass --n-qubits to override for a
+one-off run past 8 qubits.
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master
@@ -771,300 +637,3 @@ Minor, not acted on: qiskit-aer is in requirements.txt but the main
 pipeline never imports it -- only one throwaway experiment notebook
 (Final_test/nex_formula/test_formule.ipynb) uses it. Left alone since
 removing it wasn't asked for and that notebook may still matter.
-
-=====================================================================
-INJECTION-STAGE FIDELITY COST FIX (2026-08-21)
-=====================================================================
-Follow-up to the FIDELITY-COMPUTATION SCALING FIX above. That fix removed
-the hard 15-qubit cutoff, but a sweep config (weak_random, 20 qubits,
-stochastic injection) still ran for over an hour without completing --
-this section covers root-causing and mitigating that.
-
-Root cause: safe_fidelity_between_circuits' Monte-Carlo SWAP-test estimator
-was validated (in the fix above) against near-identical, low-entanglement
-circuit pairs and found cheap and roughly qubit-count-independent there.
-But the injection stage's entire job is to test candidates that differ from
-the base circuit by one newly-added CROSS-BLOCK entangling gate (cx/cz/rzz
-spanning two different partition blocks) -- exactly the kind of pair the
-earlier validation never tested. The SWAP-test's cswap ladder has to
-represent that genuine entanglement, which is dramatically more expensive
-for the matrix_product_state simulator than a near-identical pair.
-Measured directly on the actual stalled circuit (20-qubit weak_random,
-comparing the original circuit against a candidate with one extra
-cross-block cx): a single fidelity call at the pipeline's general defaults
-(samples=8, shots=128) exceeded 900s (killed after 15+ min, still running)
--- versus 11.5s for a same-circuit comparison using the same settings. Every
-one of the ~400 sequential trials in stochastic_injection (100) and the
-always-on fidelity_driven_injection greedy pass (300) hits this expensive
-case, which is why every large-qubit sweep config stalled regardless of the
-thread-oversubscription fix below.
-
-Ruled out first: this is not the old dense-Operator bug (no call path
-builds a dense Operator above fidelity_exact_threshold=10; verified by
-reading every Operator(...)/compute_fidelity call site), and not a hang --
-confirmed via before/after CPU-time deltas that the process was genuinely
-computing throughout, not deadlocked.
-
-Fix: added separate, much cheaper fidelity settings used ONLY inside the
-injection stage's per-trial loop (sa_injection/_sa_energy,
-stochastic_injection, fidelity_driven_injection), distinct from the
-pipeline's general fidelity_samples/fidelity_shots which remain at their
-existing values for the pipeline's own reporting-level checks (fid_rebuilt,
-fid_rebuilt1, fid_inj, fid_i, fid_final -- these run only a handful of times
-per pipeline call, not hundreds, so their accuracy isn't the bottleneck).
-New parameters on optimise_circuit_pipeline: injection_fidelity_samples
-(default 2) and injection_fidelity_shots (default 16), threaded into
-run_experiment.py as --injection-fidelity-samples/--injection-fidelity-shots
-and recorded in metrics.json.
-
-Benchmarked directly on the same hard pair (the actual stalled 20-qubit
-config's circuit + one extra cross-block gate) before settling on defaults:
-  - samples=8, shots=128 (old general default): >900s/call, projects to
-    hours+ for 400 trials -- this is what stalled.
-  - samples=2, shots=16 (new default): 40.5s/call, ~270 min (4.5h) for 400
-    trials -- a real ~22x+ speedup, cost still scales roughly linearly with
-    total shots (not a large fixed floor), but still slow at this qubit
-    count/circuit.
-  - samples=1, shots=8 (most aggressive floor tried): 11.65s/call, ~78 min
-    for 400 trials -- faster, but 8 total measurement shots makes the
-    fidelity estimate driving each greedy accept/reject decision close to
-    meaningless statistical noise.
-Conclusion: reducing samples/shots alone cannot bring this into a fast
-regime without degrading the injection stage's actual accept/reject
-signal into noise -- kept the samples=2/shots=16 default as a genuine,
-measured improvement (not a full solution), and flagged for the user that
-a further fix (e.g. restricting the SWAP-test to the affected qubits/blocks
-rather than the full circuit) would need to replace tuning these two
-knobs further. Not implemented in this pass.
-
-Separately (found and fixed in the same investigation, not what caused
-the multi-hour stalls but a real inefficiency): the injection stage's
-sequential per-trial loop was running with no BLAS thread cap, so every
-small linear-algebra call (compress_custom, qiskit_opt_pass, the fidelity
-check itself) independently spun up a thread pool sized to every core the
-process could see -- 94 threads observed on one process, with wall-clock
-CPU time running at ~16x realtime due to contention, not genuine
-parallelism (actual parallelism for this pipeline comes from joblib's
-process-level fan-out in optimise_block_nsga2, not from each individual
-matrix op competing for every core). Fixed by capping OMP_NUM_THREADS/
-OPENBLAS_NUM_THREADS/MKL_NUM_THREADS/NUMEXPR_NUM_THREADS/
-VECLIB_MAXIMUM_THREADS to 1 via os.environ.setdefault(...) at the top of
-M1_finale/final_m1_script.py, before numpy/qiskit-aer are imported (these
-libraries read the env vars once at init, not per-call). Verified via
-threadpoolctl that every thread pool (numpy's OpenBLAS, scipy's,
-scikit-learn's, and qiskit-aer's own bundled OpenBLAS) reports
-num_threads: 1 after this change; thread count on a live run dropped from
-94 to ~22-43, and CPU time began tracking wall-clock 1:1 instead of ~16:1.
-This cap is a deliberate, permanent default (not a tunable CLI throttle) --
-per instruction, this project's stance is that full process-level
-parallelism (joblib's Parallel(-1)) is intentional and hardware-level
-thermal safety is not something this software needs to manage; this fix is
-about eliminating wasted contention inside a single process, not capping
-overall resource usage.
-
-Verified: full pytest smoke suite (10/10) passes with all of the above
-applied.
-
-=====================================================================
-SWAP-TEST FIDELITY BLOWUP ON GENUINELY ENTANGLED CIRCUITS (2026-08-24)
-=====================================================================
-Discovered while resuming the Phase 2 12/16/20-qubit sweep (the 44 configs
-left over from 2026-08-21, see that section's "Not started" note). Before
-launching the full remaining batch, timed one real 20-qubit weak_random
-config (stochastic injection, real settings g100/p100): 188.8s end-to-end
-(partitioning 0.3s, block_optimization 112.6s, injection 64.3s) -- looked
-safe, so the remaining 44-config sweep was launched.
-
-It was not safe in general -- only for weak_random. Launched via run_sweep.py
-in the background and checked in on periodically:
-- All 4 remaining weak_random_20q configs completed, but with far more
-  variance than the one timed sample suggested: 149.3s / 1632.7s / 2444.0s /
-  5468.4s (2.5 min to 91 min) for otherwise-identical settings, different
-  only by seed. Root cause (consistent with the 2026-08-21 section):
-  injection-stage cost depends on which specific cross-block gate pair gets
-  tested, not just qubit count -- some seeds' partitions happen to produce
-  cheap pairs, others expensive ones. Not a new bug, just wider variance
-  than one sample revealed.
-- The next config (qaoa_maxcut_12q_stochastic_seed0) then hung: still
-  running after 110+ minutes with zero new output. Diagnosed live via
-  /proc/<pid>/io (wchar/syscw unchanged across a 15s window while CPU stayed
-  pegged at ~100%) -- confirmed it was stuck computing inside a single call,
-  not slowly progressing through many silent trials. Killed (SIGTERM,
-  cleanly; run_sweep.py's per-config subprocess isolation meant the sweep
-  itself just logged it as [fail] and moved on, no manual sweep restart
-  needed). The very next config, qaoa_maxcut_12q_stochastic_seed1, hit the
-  identical signature (same zero-I/O-while-100%-CPU fingerprint, ~51 min in)
-  -- ruling out a one-off fluke tied to seed0's specific random circuit and
-  pointing at something systemic to the qaoa_maxcut circuit family. Also
-  killed.
-
-Root cause, confirmed by direct reproduction (not just inferred from the
-hang): built a synthetic candidate circuit shaped like a real post-
-stochastic_injection output (a lightly-entangled base plus 6 cross-block
-rzz gates, matching the "N gates retained" counts actually seen in the
-sweep log) and timed safe_fidelity_between_circuits against a real
-qaoa_maxcut_circuit(12, p=2) target:
-  - injection_fidelity_samples=2 / shots=16 (the "cheap" defaults added by
-    the 2026-08-21 fix specifically to keep the injection-stage per-trial
-    loop fast): 242.8s for ONE call -- already ~6x worse than that fix's
-    own worst-case benchmark (40.5s, measured only against weak_random
-    circuits).
-  - fidelity_swap_samples=8 / shots=128 (the general/reporting defaults):
-    exceeded a 300s timeout, never returned.
-Mechanism: optimise_circuit_pipeline calls safe_fidelity_between_circuits
-at the general (expensive) settings five times per run purely for reporting
-(fid_rebuilt, fid_rebuilt1, fid_inj, fid_i, fid_final --
-M1_finale/final_m1_script.py lines ~1487/1494/1513/1519-ish/final-summary),
-on the 2026-08-21 fix's assumption that "a handful of calls" wouldn't matter
-even at the pricier settings. That held for weak_random because its target
-circuit is weakly entangled by construction. qaoa_maxcut's target is a real
-QAOA circuit (rzz layers across a ring+chord graph, genuinely entangled) --
-the MPS-backed SWAP-test's cost blows up on genuinely entangled circuit
-PAIRS (candidate structure AND target structure both matter), independent
-of samples/shots. Lowering shots further would not reliably fix this: the
-already-"cheap" injection settings still took 4 minutes in the repro.
-
-Practical implication: this is not a weak_random-specific or seed0-specific
-fluke. w_state, qft, and hw_efficient_ansatz are also "genuinely entangled"
-circuit families (not weakly-connected like weak_random) and are live
-candidates to hit the same wall at 12+ qubits -- untested as of this entry
-since the sweep was paused before reaching them.
-
-Not fixed in this pass -- paused the sweep instead of continuing to
-individually discover and kill hangs. Two follow-ups identified, not done:
-1. Pragmatic/immediate: run_sweep.py has no per-config watchdog timeout --
-   a hung config currently requires manual detection (via /proc/<pid>/io,
-   as done here) and a manual kill before the sweep's own crash-isolation
-   (subprocess-per-config, [fail]-and-continue) can take over. Adding an
-   automatic timeout would let a sweep run unattended through configs like
-   this instead of stalling indefinitely.
-2. Real fix, larger: the underlying gap is that safe_fidelity_between_
-   circuits' MPS SWAP-test is not a robust proxy once either circuit in the
-   pair is genuinely entangled, and the pipeline's 5 general-settings calls
-   were never gated by the same cost awareness as the injection-loop calls.
-   Two independent angles worth considering: (a) restrict the SWAP-test to
-   the affected qubits/blocks instead of the full circuit -- explicitly
-   flagged as unimplemented follow-up in the 2026-08-21 section already;
-   (b) qc_orig is only 12 qubits here, well within compute_fidelity's dense-
-   Operator range -- the approximate path is only being used because
-   fidelity_exact_threshold defaults to 10, not because exact computation is
-   actually intractable at this size. Revisiting the threshold itself (or
-   making the general/reporting calls prefer exact fidelity whenever both
-   circuits are small enough) may be cheaper than fixing the approximation.
-
-Sweep state: paused at the user's request at 60/100 configs done (56 from
-2026-08-19/21 plus the 4 weak_random_20q configs from this session).
-run_sweep.py's resumability (skip any run_id with an existing metrics.json)
-means the remaining 40 configs -- all of qaoa_maxcut/w_state/qft/
-hw_efficient_ansatz at 12q and 16q -- can be resumed later once one of the
-two follow-ups above is in place, without re-running anything already done.
-Stopped cleanly (SIGTERM to run_sweep.py, which tore down the running
-subprocess's process group itself; verified no orphaned run_experiment.py
-or joblib/loky worker processes remained). Partial run directories left
-behind by the two killed configs (PNGs/config.json with no metrics.json)
-were removed so a future resume attempt re-runs them cleanly rather than
-finding stale artifacts.
-
-=====================================================================
-SWAP-TEST FIX, OPTION (B): PREFER EXACT FIDELITY WHEN TRACTABLE
-(2026-08-24, uncommitted as of this entry)
-=====================================================================
-Implements follow-up (b) from the "SWAP-TEST FIDELITY BLOWUP" section above:
-revisit fidelity_exact_threshold itself rather than trying to fix the
-SWAP-test proxy. Not yet committed -- see "Verification status" below for
-why this is documented as in-progress, not closed out.
-
-Root idea: safe_fidelity_between_circuits' exact path (dense Operator trace
-fidelity) costs depend only on qubit count/gate depth, not on how entangled
-the two circuits are -- unlike the MPS-backed SWAP-test, which blows up
-specifically ON entanglement. So for the qaoa_maxcut/w_state/qft/
-hw_efficient_ansatz families (genuinely entangled by construction), exact
-computation can be cheaper AND more accurate than the approximate proxy at
-sizes previously assumed to need approximation.
-
-Benchmarked directly (M1_finale/final_m1_script.py, single-threaded BLAS,
-two independently-generated qaoa_maxcut_circuit(n, p=2) circuits per n) to
-find where exact stops being worth it:
-  n=10: 1.08s/call,   310MB peak RSS
-  n=12: 25.34s/call,  1.28GB peak RSS
-  n=13: 144.97s/call, 4.36GB peak RSS
-  n=14: 897.81s/call, 16.66GB peak RSS  <- too slow/memory-heavy to use by default
-For comparison, the approximate path on a realistic post-injection candidate
-pair at n=12 measured 242.8s/call in the 2026-08-24 blowup investigation --
-exact is ~10x faster there, and the general-settings approximate call never
-returned within a 300s timeout at n=12 either. Exact clearly wins up to
-n=13; n=14 is where exact itself becomes the bottleneck.
-
-Implemented in M1_finale/final_m1_script.py's optimise_circuit_pipeline:
-- The previously-single fidelity_exact_threshold (default 10, shared by both
-  the pipeline's ~5 general/reporting safe_fidelity_between_circuits calls
-  AND the injection stage's per-trial loop) is now TWO independent
-  parameters:
-  - fidelity_exact_threshold (general/reporting calls only): default raised
-    10 -> 13. Only ~5 calls/run (fid_rebuilt, fid_rebuilt1, fid_inj, fid_i,
-    fid_final), so even n=13's 145s/call costs ~12 min/run total -- an
-    acceptable trade for eliminating the >300s-and-still-hanging approximate
-    behavior these calls hit at 12-13 qubits on entangled targets.
-  - injection_fidelity_exact_threshold (new; injection stage's per-trial
-    loop only): default 12, deliberately NOT raised to 13/14. This loop
-    calls fidelity hundreds of times per run (stochastic_injection's 100
-    trials + the always-on fidelity_driven_injection's 300 trials), so
-    per-call cost compounds -- 25s/call at n=12 is a real but bounded cost
-    (~2-3h worst case for the full injection stage at n=12), while 145s or
-    898s/call times hundreds of trials would be far worse than the
-    approximate path it replaces.
-- meta["injection_fidelity_exact_threshold"] added alongside the existing
-  fidelity_exact_threshold/fidelity_samples/fidelity_shots/
-  injection_fidelity_samples/injection_fidelity_shots fields.
-- run_experiment.py: new --injection-fidelity-exact-threshold CLI flag
-  (default 12, wired into the pipeline call); --fidelity-exact-threshold's
-  default changed 10 -> 13, help text updated with the benchmarked numbers
-  above.
-- aggregate_results.py: injection_fidelity_exact_threshold added to
-  METRIC_FIELDS so it surfaces in runs/results_master.csv (existing runs
-  without the field are handled the same way older schema-missing fields
-  already are -- see the 2026-08-19 fidelity-scaling-fix entry).
-
-Verified: full pytest suite (10/10) passes unchanged with these new
-defaults -- the smoke-test circuits stay well under both new thresholds so
-this doesn't change their behavior, only larger runs'.
-
-Verification status -- NOT fully closed out: a real end-to-end check was
-attempted (python run_experiment.py --circuit qaoa_maxcut --n-qubits 12
---injection-method stochastic --seed 0 --generations 10 --pop-size 20, the
-exact circuit family/size that hung in the 2026-08-24 blowup investigation).
-Confirmed working as intended for the general/reporting path: fid_rebuilt
-and fid_rebuilt1 (the first two exact calls) returned promptly (0.00024,
-0.00050) instead of hanging past 900s. But the injection stage's per-trial
-loop (now using injection_fidelity_exact_threshold=12, i.e. exact) ran for
-over 2h15m without completing stochastic_injection's 100-trial pass --
-confirmed via /proc/<pid>/io (zero syscall/read/write-byte change across
-both a 15s and a 30s sampling window) that this was genuine, uninterrupted
-CPU-bound computation the whole time (not a deadlock -- CPU time advanced
-exactly with wall-clock in every check), just markedly slower than the
-25s/call isolated benchmark above predicted. Likely cause, not confirmed:
-the REAL circuits compared inside this loop are the block-optimized,
-recomposed circuit (post NSGA-II, post compress_custom/qiskit_opt_pass) --
-not the bare two-fresh-qaoa_maxcut-circuits pair the 25s/call number was
-benchmarked against -- and likely have higher gate count/depth, which is
-what dense-Operator construction cost actually scales with. Killed at the
-user's request (process + wrapper confirmed gone via ps) before reaching a
-conclusive total time, so the actual injection-stage cost at n=12 in
-production conditions is still unmeasured, not just "slower than hoped."
-
-Not done, flagged for next session:
-1. Re-run the same verification (or a cheaper, more targeted benchmark that
-   builds the actual post-block-optimization recomposed circuit directly,
-   rather than a fresh qaoa_maxcut pair) to get a real per-call cost for the
-   injection loop's actual inputs, and a real total wall-clock for one
-   config -- needed before trusting the "~2-3h/config at 12q" estimate this
-   entry's design was based on.
-2. The 16-qubit tier (qaoa_maxcut/w_state/qft/hw_efficient_ansatz at 16q)
-   is untouched by this fix -- exact is infeasible there (2^16 matrix is
-   ~69GB; extrapolating the n=14 timing, likely hours per call too) -- still
-   needs follow-up (a) from the 2026-08-24 blowup section (restrict the
-   SWAP-test to affected qubits/blocks) or must be dropped from the sweep
-   for these circuit families.
-3. Changes in M1_finale/final_m1_script.py, run_experiment.py, and
-   aggregate_results.py are uncommitted as of this entry -- not yet
-   committed to git pending the verification in (1).

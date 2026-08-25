@@ -98,7 +98,7 @@ def parse_args(argv=None):
                          "many trials. For genuinely entangled targets (e.g. QAOA) exact is both "
                          "correct and faster than the SWAP-test proxy at n<=12 (measured: 25s "
                          "exact vs. 242.8s approximate per call at n=12) -- see the "
-                         "'SWAP-TEST FIDELITY BLOWUP' entry in logs.txt. Not raised to 13/14 "
+                         "'SCALING — DEFERRED' entry in logs.txt. Not raised to 13/14 "
                          "because per-call exact cost there (145s/898s) times hundreds of trials "
                          "is worse than the approximate path it would replace.")
     p.add_argument("--fidelity-swap-samples", type=int, default=8,

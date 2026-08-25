@@ -1,6 +1,6 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-08-24
+Date: 2026-08-25
 
 =====================================================================
 OBJECTIVE
@@ -21,6 +21,13 @@ shallower, cheaper circuits that preserve accuracy are directly
 valuable, and are hard to obtain with standard (non-partitioned,
 single-objective) optimization approaches at scale.
 
+Given the ~4-month, laptop-only timeline to a paper submission, the
+current phase deliberately validates the approach and research
+contribution at a fixed, comfortably tractable scale (8 qubits) first,
+rather than continuing to chase larger circuit sizes before that
+contribution is decided. Pushing to larger circuits is a real, planned
+follow-on goal, not an abandoned one -- see "NEXT STEPS" below.
+
 =====================================================================
 CURRENT STATUS
 =====================================================================
@@ -36,20 +43,29 @@ problem sizes, and result aggregation for analysis.
 
 A benchmark suite covering several standard quantum circuit types
 (used in quantum chemistry, optimization, and communication
-applications) has been built and is being run at increasing circuit
-sizes to characterize how well the approach scales. This is
-currently in progress; a scaling limitation was identified this week
-for certain circuit types and is being addressed before continuing.
+applications) has been built and run at a fixed 8-qubit scale: 50
+completed runs (5 circuit families x 2 injection strategies x 5
+seeds), producing a real, complete dataset. Attempts to push the same
+suite to larger circuit sizes (12/16/20 qubits) repeatedly hit
+performance walls in the fidelity/accuracy computation for circuits
+with genuine, non-trivial entanglement (e.g. QAOA-style circuits) --
+some configurations took over an hour or stalled outright. Rather than
+keep spending time debugging that, the decision was made this week to
+pause it and move the research forward on the complete 8-qubit
+dataset now in hand; scaling to larger sizes is deferred to a later,
+dedicated effort (see NEXT STEPS).
 
 =====================================================================
 NEXT STEPS
 =====================================================================
-- Resolve the scaling limitation found in this week's runs, then
-  complete the benchmark sweep across all target circuit sizes.
 - Decide on and implement the specific research contribution to
-  highlight for the paper (candidates already identified).
+  highlight for the paper (candidates already identified), and run
+  the resulting comparisons on the existing 8-qubit benchmark dataset.
 - Move into writing up results, targeting submission around
   December 2026.
+- Revisit scaling to larger circuit sizes (12+ qubits) as a follow-on
+  effort, time permitting -- not on the critical path to a first
+  submission built on the 8-qubit results.
 
 =====================================================================
 IMPLEMENTATION DETAILS
@@ -80,21 +96,25 @@ Quality is tracked throughout via multi-objective indicators
 single best-fitness score.
 
 Fidelity computation (the accuracy metric the whole pipeline
-optimizes against) is the main current engineering challenge.
-Comparing two circuits exactly requires building their full
-2^n x 2^n matrices, which is only tractable up to ~10-12 qubits. Past
-that, we use an approximate Monte-Carlo SWAP-test estimator (circuit-
-based, run under a tensor-network/matrix-product-state simulator)
-instead of the exact computation. This unblocked runs up to 20
-qubits for weakly-connected test circuits, but this week we found it
-becomes very expensive again for circuits with genuine, non-trivial
-entanglement (e.g. QAOA-style circuits), because the tensor-network
-simulator's cost depends on how entangled the circuits being compared
-are, not just on qubit count. This is the scaling limitation
-currently being worked on -- likely fix is to compute the approximate
-fidelity only over the affected qubits/blocks instead of the whole
-circuit, or to prefer the exact computation more often at the
-(still-tractable) sizes currently being benchmarked.
+optimizes against) is exact at the current 8-qubit scale: comparing
+two circuits' full 2^n x 2^n matrices is cheap and fast at this size,
+so it is not an engineering concern for the results being produced
+right now.
+
+Extending fidelity computation past exact-matrix range (roughly
+10-12+ qubits, needed to eventually push the benchmark suite to
+larger circuits) was explored: an approximate Monte-Carlo SWAP-test
+estimator (circuit-based, run under a tensor-network/matrix-product-
+state simulator) was built and worked well for weakly-connected test
+circuits up to 20 qubits, but turned out to become expensive again for
+circuits with genuine, non-trivial entanglement (e.g. QAOA-style
+circuits), since the tensor-network simulator's cost depends on how
+entangled the circuits being compared are, not just on qubit count.
+This is now a known, deferred problem rather than an open blocker on
+current work -- likely fixes (computing the approximate fidelity only
+over the affected qubits/blocks, or preferring exact computation more
+often at borderline sizes) are recorded for when scaling is picked
+back up.
 
 Engineering infrastructure built to support running many experiments
 reliably on laptop hardware:
@@ -112,5 +132,5 @@ reliably on laptop hardware:
   regressions in seconds, before committing to a long run.
 - A fixed benchmark suite of five standard circuit families (random
   weakly-connected circuits, QAOA MaxCut, W-state preparation, QFT,
-  and a hardware-efficient ansatz) at multiple qubit counts, used to
-  characterize scaling behavior consistently across experiments.
+  and a hardware-efficient ansatz), currently run at 8 qubits, used to
+  compare algorithms/strategies consistently across experiments.

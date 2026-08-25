@@ -71,19 +71,16 @@ signal.signal(signal.SIGINT, _handle_terminate)
 
 CIRCUITS = ["weak_random", "qaoa_maxcut", "w_state", "qft", "hw_efficient_ansatz"]
 
-# Per-circuit qubit sizes. Previously capped at 8: the injection stage's
-# dense-Operator fidelity computation was intractable above ~10-12 qubits
-# (a weak_random run at 12 qubits was still running after 1h45m and was
-# killed). Fixed by switching to an MPS-backed Monte-Carlo SWAP-test
-# fidelity above fidelity_exact_threshold (default 10) -- see logs.txt's
-# "FIDELITY-COMPUTATION SCALING FIX" section. Restored to the original
-# larger sizes now that this is unblocked.
+# Per-circuit qubit sizes. Capped at 8 -- larger tiers (12/16/20q) repeatedly hit
+# fidelity/injection-stage performance walls (hangs, multi-hour runs) on genuinely
+# entangled circuit families. Scaling past 8 qubits is deferred; see logs.txt's
+# "SCALING — DEFERRED" section. Pass --n-qubits to override for a one-off run.
 CIRCUIT_QUBIT_SIZES = {
-    "weak_random": [8, 12, 20],
-    "qaoa_maxcut": [8, 12, 16],
-    "w_state": [8, 12, 16],
-    "qft": [8, 12, 16],
-    "hw_efficient_ansatz": [8, 12, 16],
+    "weak_random": [8],
+    "qaoa_maxcut": [8],
+    "w_state": [8],
+    "qft": [8],
+    "hw_efficient_ansatz": [8],
 }
 
 INJECTION_METHODS = ["stochastic", "sa"]

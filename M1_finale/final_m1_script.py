@@ -1403,7 +1403,7 @@ def optimise_circuit_pipeline(
     # injection_fidelity_exact_threshold, use exact dense-Operator fidelity instead -- for
     # genuinely entangled targets (e.g. QAOA) exact is both correct AND faster than the SWAP-test
     # proxy at these sizes (measured: 25s/call exact vs. 242.8s approximate at n=12 on a real
-    # qaoa_maxcut candidate/target pair -- see "SWAP-TEST FIDELITY BLOWUP" in logs.txt). Kept as
+    # qaoa_maxcut candidate/target pair -- see "SCALING — DEFERRED" in logs.txt). Kept as
     # its own (separate, lower) threshold from fidelity_exact_threshold because this loop runs
     # hundreds of calls, not a handful -- exact cost is fine at n=12 (25s) but not at n=14+
     # (898s/call measured), so this must not follow the general threshold up that far.
