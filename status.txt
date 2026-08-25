@@ -50,19 +50,54 @@ suite to larger circuit sizes (12/16/20 qubits) repeatedly hit
 performance walls in the fidelity/accuracy computation for circuits
 with genuine, non-trivial entanglement (e.g. QAOA-style circuits) --
 some configurations took over an hour or stalled outright. Rather than
-keep spending time debugging that, the decision was made this week to
-pause it and move the research forward on the complete 8-qubit
-dataset now in hand; scaling to larger sizes is deferred to a later,
-dedicated effort (see NEXT STEPS).
+keep spending time debugging that, the decision was made to pause it
+and move the research forward on the complete 8-qubit dataset now in
+hand; scaling to larger sizes is deferred to a later, dedicated effort
+(see NEXT STEPS).
+
+This week, the specific research contribution for the paper was
+decided and implemented: an alternative per-block optimization
+algorithm (SMS-EMOA, which explicitly optimizes for a well-distributed
+set of good trade-off circuits rather than a single best one) was
+added alongside the existing NSGA-II approach, plus two supporting
+comparison studies -- different combinations of ways an individual
+circuit design can be randomly altered during the search ("mutation
+operators"), and whether adding a short local fine-tuning pass after
+the genetic search helps. All three comparisons were run on the
+existing 8-qubit benchmark suite (125 additional runs). Results:
+- The new algorithm (SMS-EMOA) tends to find a wider range of good
+  trade-off circuits than the original approach (NSGA-II), at no extra
+  computing time -- but NSGA-II still tends to find the single best
+  circuit slightly more often. Neither is a clear winner; both will be
+  reported as complementary options.
+- Comparing mutation operator combinations confirmed a result from a
+  recent published study: adding a "delete part of the design" option
+  alongside "swap" and "add" gives a better balance of accuracy vs.
+  circuit size than "swap and add" alone. However, the simple approach
+  already used throughout this project's pipeline still performs best
+  overall on this specific problem, so it remains the default.
+- The local fine-tuning pass does what it's supposed to at the
+  individual-block level (small, real accuracy gains there), but those
+  gains get overshadowed by the pipeline's later re-injection step,
+  which currently dominates the final result at this accuracy level --
+  a genuine, useful negative finding rather than a failed feature.
+- A cross-cutting takeaway from all three comparisons: at the current
+  8-qubit scale, the choices made during per-block optimization matter
+  less to the final result than the choices made in the later
+  re-injection step. This will inform how results are presented in the
+  paper (likely reporting some comparisons at the per-block level,
+  where the real differences are visible, rather than only on the
+  final end-to-end accuracy number).
 
 =====================================================================
 NEXT STEPS
 =====================================================================
-- Decide on and implement the specific research contribution to
-  highlight for the paper (candidates already identified), and run
-  the resulting comparisons on the existing 8-qubit benchmark dataset.
+- Run the same mutation-operator and local-fine-tuning comparisons
+  against the new SMS-EMOA algorithm (so far only run against the
+  original NSGA-II approach), to complete the picture.
 - Move into writing up results, targeting submission around
-  December 2026.
+  December 2026 -- including deciding how much to lean on per-block
+  vs. end-to-end accuracy comparisons per the finding above.
 - Revisit scaling to larger circuit sizes (12+ qubits) as a follow-on
   effort, time permitting -- not on the critical path to a first
   submission built on the 8-qubit results.
@@ -79,9 +114,13 @@ implementation):
    2-qubit gate count, split it into blocks via Louvain community
    detection (or a Metis/Kernighan-Lin alternative for bounded block
    sizes).
-2. Per-block optimization -- NSGA-II evolves a population of gate
-   sequences per block over three objectives: maximize fidelity,
-   minimize circuit depth, minimize gate-count cost.
+2. Per-block optimization -- evolves a population of gate sequences
+   per block over three objectives: maximize fidelity, minimize
+   circuit depth, minimize gate-count cost. Two interchangeable
+   algorithms are now available: NSGA-II (the original approach) and
+   SMS-EMOA (new, see above); both also support swapping in different
+   mutation-operator combinations and an optional local fine-tuning
+   pass after the search.
 3. Reassembly -- optimized blocks are stitched back into a full
    circuit in original gate order, preserving the gates that
    originally crossed block boundaries.
