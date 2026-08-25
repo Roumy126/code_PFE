@@ -912,7 +912,76 @@ def update_rotation_angles(
 # In[ ]:
 
 
-def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size=300, P_star=None):
+# =============================
+# Mutation operators (GECCO 2025, arXiv 2504.06413) and hybrid GA+LAS helper
+# =============================
+# Shared by optimise_block_nsga2 and optimise_block_smsemoa so both algorithms can be
+# compared under the same mutation_scheme/hybrid_las choices.
+
+def mut_swap(ind):
+    """Exchanges two genes' positions (no-op if fewer than 2 genes)."""
+    if len(ind) >= 2:
+        i, j = random.sample(range(len(ind)), 2)
+        ind[i], ind[j] = ind[j], ind[i]
+    return ind
+
+
+def mut_addition(ind, gen_gene):
+    """Inserts a freshly generated gene at a random position."""
+    idx = random.randrange(len(ind) + 1)
+    ind.insert(idx, gen_gene())
+    return ind
+
+
+def mut_deletion(ind):
+    """Removes a random gene (no-op if the chromosome would become empty)."""
+    if len(ind) > 1:
+        del ind[random.randrange(len(ind))]
+    return ind
+
+
+def make_mutate_fn(mutation_scheme: str, gen_gene):
+    """Builds the `mutate` toolbox operator for a given scheme: 'point' (the original
+    single-gene-replace operator) or the GECCO 2025 combinations 'swap_add'
+    (swap + addition) / 'swap_add_delete' (swap + addition + deletion), each op applied
+    in sequence per call. Returns the individual directly (not a DEAP (ind,) tuple),
+    matching this file's existing tb.mutate(ind) call convention."""
+    def mut_point(ind):
+        if len(ind) > 0:
+            ind[random.randrange(len(ind))] = gen_gene()
+        return ind
+
+    ops_by_scheme = {
+        "point": [mut_point],
+        "swap_add": [mut_swap, lambda ind: mut_addition(ind, gen_gene)],
+        "swap_add_delete": [mut_swap, lambda ind: mut_addition(ind, gen_gene), mut_deletion],
+    }
+    if mutation_scheme not in ops_by_scheme:
+        raise ValueError(f"mutation_scheme must be one of {sorted(ops_by_scheme)}.")
+    ops = ops_by_scheme[mutation_scheme]
+
+    def mutate(ind):
+        for op in ops:
+            ind = op(ind)
+        return ind
+    return mutate
+
+
+def apply_hybrid_las(best_ind, build_fn, target_unitary, hist_moo):
+    """Runs the LAS local angle search (update_rotation_angles) on the GA's winning
+    chromosome and records its effect into hist_moo[-1] for per-run visibility."""
+    fid_before = compute_fidelity(build_fn(best_ind), target_unitary)
+    refined = update_rotation_angles(list(best_ind), build_fn, target_unitary)
+    fid_after = compute_fidelity(build_fn(refined), target_unitary)
+    if hist_moo:
+        hist_moo[-1]["las_applied"] = True
+        hist_moo[-1]["fidelity_before_las"] = float(fid_before)
+        hist_moo[-1]["fidelity_after_las"] = float(fid_after)
+    return refined
+
+
+def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size=300, P_star=None,
+                          mutation_scheme="point", hybrid_las=False):
     nq = qc_target.num_qubits; U_target = Operator(qc_target).data
     gate_pool = ["h", "x", "y", "z", "rx", "ry", "rz"]
     if nq >= 2:
@@ -977,7 +1046,7 @@ def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size
     tb.register("individual", tools.initRepeat, creator.Individual, tb.gene, 12)
     tb.register("population", tools.initRepeat, list, tb.individual)
     tb.register("mate", tools.cxTwoPoint)
-    tb.register("mutate", lambda ind: (ind.__setitem__(random.randrange(len(ind)), gen_gene()) or ind))
+    tb.register("mutate", make_mutate_fn(mutation_scheme, gen_gene))
     tb.register("select", tools.selNSGA2)
 
     pop = tb.population(pop_size)
@@ -1003,9 +1072,6 @@ def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size
         pop = tb.select(pop + offspring, k=len(pop))
         # MOO tracking
         fits_gen = np.array([ind.fitness.values for ind in pop])
-        history_moo.append(evaluate_run(fits_gen))
-        # MOO tracking
-        fits_gen = np.array([ind.fitness.values for ind in pop])
         history_moo.append(evaluate_run(fits_gen, P_star=P_star))
         best = max(pop, key=lambda i: i.fitness.values[0])
         hist_eps.append(1 - best.fitness.values[0])
@@ -1020,9 +1086,180 @@ def optimise_block_nsga2(qc_target: QuantumCircuit, *, generations=500, pop_size
     # Final metrics summary
     final_metrics = evaluate_run(np.array([ind.fitness.values for ind in pop]), P_star=P_star)
     print(f"Final MOO Metrics: {final_metrics}")
-    return build(max(pop, key=lambda i: i.fitness.values[0])), history_moo
+    best_ind = max(pop, key=lambda i: i.fitness.values[0])
+    if hybrid_las:
+        best_ind = apply_hybrid_las(best_ind, build, U_target, history_moo)
+    return build(best_ind), history_moo
 
 
+# =============================
+# Intra-block optimization: SMS-EMOA (S-Metric Selection EMOA, Beume et al. 2007)
+# =============================
+# Alternative per-block optimizer to optimise_block_nsga2: same chromosome encoding,
+# objectives, and DEAP creator/toolbox pattern, but environmental selection replaces
+# NSGA-II's crowding distance with a hypervolume-contribution-based trim of the
+# boundary front, directly reusing compute_hv as the selection criterion instead of
+# only a post-hoc reporting metric. This is a generational adaptation (batches
+# offspring per generation, matching evaluate_population's parallel evaluation) rather
+# than the textbook's steady-state (mu+1) loop, which would evaluate one individual at
+# a time and not benefit from joblib batching.
+
+def optimise_block_smsemoa(qc_target: QuantumCircuit, *, generations=500, pop_size=300, P_star=None,
+                            mutation_scheme="point", hybrid_las=False):
+    nq = qc_target.num_qubits; U_target = Operator(qc_target).data
+    gate_pool = ["h", "x", "y", "z", "rx", "ry", "rz"]
+    if nq >= 2:
+        gate_pool += ["cx", "cz", "rzz"]
+
+    def gen_gene():
+        g = random.choice(gate_pool); tgt = random.randrange(nq)
+        if g in {"rx", "ry", "rz"}:
+            return (g, tgt, None, random.uniform(0, 2 * math.pi))
+        if g == "rzz":
+            ctrl = random.choice([q for q in range(nq) if q != tgt])
+            return (g, tgt, ctrl, random.uniform(0, 2 * math.pi))
+        if g in {"cx", "cz"}:
+            ctrl = random.choice([q for q in range(nq) if q != tgt])
+            return (g, tgt, ctrl, None)
+        return (g, tgt, None, None)
+
+    def build(ch):
+        qc = QuantumCircuit(nq)
+        for g, t, ctrl, a in ch:
+            if g == "rzz":
+                qc.rzz(a, ctrl, t)
+            elif g in {"cx", "cz"}:
+                getattr(qc, g)(ctrl, t)
+            elif g in {"rx", "ry", "rz"}:
+                getattr(qc, g)(a, t)
+            else:
+                getattr(qc, g)(t)
+        return qc
+
+    def eval_ind(ind):
+        qc = build(ind); fid = compute_fidelity(qc, U_target)
+        depth = transpile(qc, basis_gates=["cx", "rz", "sx"], optimization_level=1).depth()
+        cost = len(ind)  # chromosome length as proxy (fast). Replace by compute_gate_cost(qc) if desired.
+        return fid, depth, cost
+
+    fid_cache: Dict[Tuple, Tuple[float, int, int]] = {}
+
+    def evaluate_population(individuals):
+        to_run, seen_keys = [], set()
+        for ind in individuals:
+            key = tuple(ind)
+            if key not in fid_cache and key not in seen_keys:
+                to_run.append(ind)
+                seen_keys.add(key)
+        fresh = Parallel(-1)(delayed(eval_ind)(i) for i in to_run)
+        for ind, fit in zip(to_run, fresh):
+            fid_cache[tuple(ind)] = fit
+        return [fid_cache[tuple(ind)] for ind in individuals]
+
+    if not hasattr(creator, "FitnessMulti"):
+        creator.create("FitnessMulti", base.Fitness, weights=(1, -1, -1))
+        creator.create("Individual", list, fitness=creator.FitnessMulti)
+    tb = base.Toolbox(); tb.register("gene", gen_gene)
+    tb.register("individual", tools.initRepeat, creator.Individual, tb.gene, 12)
+    tb.register("population", tools.initRepeat, list, tb.individual)
+    tb.register("mate", tools.cxTwoPoint)
+    tb.register("mutate", make_mutate_fn(mutation_scheme, gen_gene))
+
+    def rank_by_front(individuals):
+        """Pareto rank (0 = non-dominated front) for binary-tournament parent selection --
+        diversity here is handled by the hypervolume environmental selection below, not
+        by the tournament, so rank alone (no crowding distance) is enough."""
+        fronts = tools.sortNondominated(individuals, len(individuals), first_front_only=False)
+        rank = {}
+        for r, front in enumerate(fronts):
+            for ind in front:
+                rank[id(ind)] = r
+        return rank
+
+    def tournament(individuals, rank):
+        a, b = random.sample(individuals, 2)
+        ra, rb = rank[id(a)], rank[id(b)]
+        if ra < rb: return a
+        if rb < ra: return b
+        return random.choice([a, b])
+
+    def hv_trim_boundary_front(accepted, boundary, k_needed):
+        """S-metric selection: removes, one at a time, the boundary-front individual
+        whose removal loses the LEAST hypervolume, until only k_needed remain. Fidelity
+        is converted to minimize convention (costs[:, 0] = 1 - fid) exactly as
+        evaluate_run does, and the normalization bounds + reference point are computed
+        once from the full accepted+boundary set (St) so the metric stays consistent
+        across the trim loop instead of shifting after each removal."""
+        survivors = list(boundary)
+        st = accepted + survivors
+        costs_st = np.array([ind.fitness.values for ind in st])
+        costs_st[:, 0] = 1.0 - costs_st[:, 0]
+        _, f_min, f_max = normalize_objectives(costs_st)
+        F_norm_st = normalize_objectives(costs_st, f_min, f_max)[0]
+        ref_point = np.max(F_norm_st, axis=0) + 0.1
+        n_accepted = len(accepted)
+
+        while len(survivors) > k_needed:
+            costs = np.array([ind.fitness.values for ind in (accepted + survivors)])
+            costs[:, 0] = 1.0 - costs[:, 0]
+            F_norm = normalize_objectives(costs, f_min, f_max)[0]
+            full_hv = compute_hv(F_norm, ref_point)
+            contributions = [
+                full_hv - compute_hv(np.delete(F_norm, n_accepted + i, axis=0), ref_point)
+                for i in range(len(survivors))
+            ]
+            survivors.pop(int(np.argmin(contributions)))
+        return survivors
+
+    def environmental_select(combined, k):
+        fronts = tools.sortNondominated(combined, len(combined), first_front_only=False)
+        selected = []
+        idx = 0
+        while idx < len(fronts) and len(selected) + len(fronts[idx]) <= k:
+            selected.extend(fronts[idx]); idx += 1
+        if len(selected) == k or idx >= len(fronts):
+            return selected
+        k_needed = k - len(selected)
+        return selected + hv_trim_boundary_front(selected, fronts[idx], k_needed)
+
+    pop = tb.population(pop_size)
+    fits = evaluate_population(pop)
+    for ind, fit in zip(pop, fits):
+        ind.fitness.values = fit
+    hist_eps = [1 - max(pop, key=lambda i: i.fitness.values[0]).fitness.values[0]]
+    history_moo = []
+
+    for gen in range(generations):
+        rank = rank_by_front(pop)
+        offspring = [tb.clone(tournament(pop, rank)) for _ in range(len(pop))]
+        for c1, c2 in zip(offspring[::2], offspring[1::2]):
+            if random.random() < 0.9:
+                tb.mate(c1, c2); del c1.fitness.values, c2.fitness.values
+        for ind in offspring:
+            if random.random() < 0.9:
+                tb.mutate(ind); del ind.fitness.values
+        invalid = [i for i in offspring if not i.fitness.valid]
+        fits = evaluate_population(invalid)
+        for ind, fit in zip(invalid, fits):
+            ind.fitness.values = fit
+        pop = environmental_select(pop + offspring, pop_size)
+        fits_gen = np.array([ind.fitness.values for ind in pop])
+        history_moo.append(evaluate_run(fits_gen, P_star=P_star))
+        best = max(pop, key=lambda i: i.fitness.values[0])
+        hist_eps.append(1 - best.fitness.values[0])
+        print(f"[SMS-EMOA] Gen {gen + 1:>4} | Fid {best.fitness.values[0]:.4f} | D {best.fitness.values[1]:>3} | C {best.fitness.values[2]:>3}")
+
+    front = tools.sortNondominated(pop, len(pop), first_front_only=True)[0]
+    plot_convergence(hist_eps, save_as=f"block_fid_conv_smsemoa_{nq}q")
+    plot_pareto(front, save_as=f"block_pareto_smsemoa_{nq}q")
+    plot_3d_clusters(front, n_clusters=4, save_as=f"block_clusters3d_smsemoa_{nq}q")
+
+    final_metrics = evaluate_run(np.array([ind.fitness.values for ind in pop]), P_star=P_star)
+    print(f"Final MOO Metrics (SMS-EMOA): {final_metrics}")
+    best_ind = max(pop, key=lambda i: i.fitness.values[0])
+    if hybrid_las:
+        best_ind = apply_hybrid_las(best_ind, build, U_target, history_moo)
+    return build(best_ind), history_moo
 
 
 
@@ -1371,6 +1608,9 @@ def optimise_circuit_pipeline(
     max_block_size: int = 5,
     k_interface: int = 1,
     injection_method: str = "stochastic",  # "sa" or "stochastic"
+    block_algorithm: str = "nsga2",  # "nsga2" or "smsemoa"
+    mutation_scheme: str = "point",  # "point", "swap_add", or "swap_add_delete"
+    hybrid_las: bool = False,
     fid_threshold: float = 0.999,
     sa_iters: int = 2500,
     sa_seed: Optional[int] = 42,
@@ -1464,8 +1704,15 @@ def optimise_circuit_pipeline(
         print(f"\n––– Block {idx} | Qubits {sorted(bl)} –––")
         print(sub.draw(output="text"))
         sub.draw('mpl', filename=f"block_{idx}_circuit_original.png", style='mpl', fold=1)
-        print("  → NSGA-II optimization in progress...")
-        best, hist_moo = optimise_block_nsga2(sub, generations=generations, pop_size=pop_size)
+        print(f"  → {block_algorithm} optimization in progress (mutation_scheme={mutation_scheme}, hybrid_las={hybrid_las})...")
+        if block_algorithm == "nsga2":
+            best, hist_moo = optimise_block_nsga2(sub, generations=generations, pop_size=pop_size,
+                                                   mutation_scheme=mutation_scheme, hybrid_las=hybrid_las)
+        elif block_algorithm == "smsemoa":
+            best, hist_moo = optimise_block_smsemoa(sub, generations=generations, pop_size=pop_size,
+                                                     mutation_scheme=mutation_scheme, hybrid_las=hybrid_las)
+        else:
+            raise ValueError('block_algorithm must be "nsga2" or "smsemoa".')
         moo_metrics_blocks.append(hist_moo[-1] if hist_moo else {})
         plot_moo_history(hist_moo, title=f"Evolution MoO - Block {idx}", save_as=f"moo_evolution_block_{idx}.png")
         export_all_indicators(hist_moo, idx)
@@ -1559,6 +1806,9 @@ def optimise_circuit_pipeline(
     print(f"💰 Cost of the final circuit:", cost_final)
     meta = {
         "blocks": original_blocks,
+        "block_algorithm": block_algorithm,
+        "mutation_scheme": mutation_scheme,
+        "hybrid_las": hybrid_las,
         "kept_injections": kept_injections_used,
         "injection_path_used": injection_path_used,
         "fidelity_after_injection_method": fid_inj,

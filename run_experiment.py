@@ -81,6 +81,16 @@ def parse_args(argv=None):
     p.add_argument("--ansatz-reps", type=int, default=1,
                     help="Repetition layers (--circuit hw_efficient_ansatz only).")
     p.add_argument("--injection-method", choices=["sa", "stochastic"], default="stochastic")
+    p.add_argument("--block-algorithm", choices=["nsga2", "smsemoa"], default="nsga2",
+                    help="Per-block multi-objective optimizer: NSGA-II (crowding distance) or "
+                         "SMS-EMOA (hypervolume-contribution environmental selection).")
+    p.add_argument("--mutation-scheme", choices=["point", "swap_add", "swap_add_delete"],
+                    default="point",
+                    help="'point' (single-gene replace, the original operator) or the GECCO 2025 "
+                         "combinations 'swap_add' / 'swap_add_delete' (arXiv 2504.06413).")
+    p.add_argument("--hybrid-las", action="store_true",
+                    help="Run the LAS local angle search (update_rotation_angles) on the GA's "
+                         "winning chromosome after the main loop (arXiv 2504.17561).")
     p.add_argument("--fid-threshold", type=float, default=0.9999)
     p.add_argument("--sa-iters", type=int, default=3000)
     p.add_argument("--fidelity-exact-threshold", type=int, default=13,
@@ -168,6 +178,9 @@ def main(argv=None):
         qc_opt, meta = optimise_circuit_pipeline(
             qc,
             injection_method=args.injection_method,
+            block_algorithm=args.block_algorithm,
+            mutation_scheme=args.mutation_scheme,
+            hybrid_las=args.hybrid_las,
             fid_threshold=args.fid_threshold,
             sa_iters=args.sa_iters,
             sa_seed=args.seed,

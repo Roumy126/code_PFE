@@ -4,7 +4,9 @@ Last updated: 2026-08-25 (research scope pivoted to a fixed 8-qubit
 benchmark set for now; scaling to larger qubit counts is deferred to a
 later phase -- see "SCALING — DEFERRED" note after Phase 2 below; also
 resolved and fixed the NSGA-III open item -- see "OPEN ITEM — RESOLVED"
-below)
+below; and chose + implemented the research contribution angle --
+SMS-EMOA plus mutation/hybrid-LAS ablations -- see "RESEARCH ANGLE
+CHOSEN AND IMPLEMENTED" after the scaling note)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -646,6 +648,106 @@ CIRCUIT_QUBIT_SIZES was reset to [8] for every circuit (was still
 defaulting to 12/16/20q, which would have silently resumed the paused
 large-qubit sweep on the next run) -- pass --n-qubits to override for a
 one-off run past 8 qubits.
+
+=====================================================================
+RESEARCH ANGLE CHOSEN AND IMPLEMENTED: SMS-EMOA + operator/hybrid
+ablations (2026-08-25)
+=====================================================================
+Closed the biggest open blocker from Phase 2 above (no research-
+contribution angle chosen). Picked, over a noise/crosstalk-aware
+objective: **SMS-EMOA as a new per-block optimizer, compared against
+NSGA-II (and now-verified NSGA-III), plus two supporting ablations** --
+mutation operator combinations (GECCO 2025, arXiv 2504.06413) and a
+formalized "pure GA vs. hybrid GA+LAS" comparison (GECCO 2025
+companion, arXiv 2504.17561). Chosen specifically because it reuses
+existing, already-tested code (compute_hv, the injection stage's
+pluggable-strategy pattern) and needs no new dependencies or device-
+noise modeling -- lower risk for the laptop-only, ~3.5-month remaining
+budget, especially after the scaling work above already lost several
+days to unresolved performance walls.
+
+Implemented in M1_finale/final_m1_script.py:
+- Fixed a pre-existing bug in optimise_block_nsga2: its per-generation
+  loop computed and appended evaluate_run(fits_gen) twice per
+  generation (once without P_star, once with), silently doubling
+  history_moo's length -- would have broken a fair generation-indexed
+  comparison against the new algorithm below. Removed the redundant
+  call.
+- Added a mutation_scheme param ("point" default == unchanged prior
+  behavior, "swap_add", "swap_add_delete") to optimise_block_nsga2,
+  via new mut_swap/mut_addition/mut_deletion operators. Chromosomes
+  become variable-length under swap_add/swap_add_delete; confirmed
+  nothing else assumes fixed length-12 individuals beyond the initial
+  population seeding, and DEAP's cxTwoPoint handles unequal-length
+  parents safely.
+- Added a hybrid_las param (default False) to optimise_block_nsga2:
+  when True, runs the LAS local angle search (update_rotation_angles --
+  previously dead code, zero call sites anywhere in the file) on the
+  GA's winning chromosome before building the final circuit, recording
+  las_applied/fidelity_before_las/fidelity_after_las per block.
+- New optimise_block_smsemoa function, same chromosome
+  encoding/objectives/DEAP creator-guard pattern as optimise_block_nsga2
+  (confirmed safe to reuse creator.FitnessMulti/Individual directly --
+  same 3 objectives, same maximize/minimize weights). Parent selection
+  is binary tournament by Pareto rank (rank via tools.sortNondominated,
+  id()-keyed per generation) instead of NSGA-II's crowding-distance
+  tournament. Environmental selection stacks whole Pareto fronts while
+  they fit pop_size, then for the boundary front iteratively removes
+  the individual whose removal loses the LEAST hypervolume (via the
+  existing compute_hv/normalize_objectives, same minimize-conversion
+  evaluate_run already uses) until back to pop_size -- hand-rolled
+  inside the existing DEAP loop rather than pymoo's own SMSEMOA
+  algorithm class, to keep one GA framework in the codebase (deliberate
+  choice, confirmed with the user; accepted some performance risk in
+  exchange). This is a generational adaptation of SMS-EMOA (batches
+  offspring per generation, matching evaluate_population's joblib
+  parallelism) rather than the textbook's steady-state (mu+1) loop.
+  Supports the same mutation_scheme/hybrid_las params.
+- optimise_circuit_pipeline gained block_algorithm ("nsga2"/"smsemoa"),
+  mutation_scheme, and hybrid_las params, dispatched at the per-block
+  call site exactly mirroring the existing injection_method if/elif/
+  else pattern. All three are echoed into the returned meta dict
+  (analogous to injection_path_used) so metrics.json is self-
+  describing.
+- Wired through run_experiment.py (--block-algorithm/--mutation-scheme/
+  --hybrid-las CLI flags), run_sweep.py (new BLOCK_ALGORITHMS/
+  MUTATION_SCHEMES/HYBRID_LAS_OPTIONS axes, defaulting to single-value
+  lists so a plain `python run_sweep.py` run is unchanged; run_id_for
+  extended to encode all three, avoiding stale-run collisions), and
+  aggregate_results.py (3 new CONFIG_FIELDS columns, plus
+  n_blocks_hybrid_las_applied/mean_fidelity_before_las/
+  mean_fidelity_after_las aggregated from the per-block LAS records).
+- tests/test_pipeline_smoke.py: added a 5-case parametrized test
+  (smsemoa, each mutation_scheme, hybrid_las, and one combined case).
+  Full suite (11 tests) passes.
+- Verified end-to-end: a manual run_experiment.py run with
+  --block-algorithm smsemoa --mutation-scheme swap_add_delete
+  --hybrid-las produced a valid metrics.json with all new fields
+  populated (hybrid_las improved fidelity in 3/4 blocks); a second
+  nsga2 baseline run plus aggregate_results.py confirmed the 3 new CSV
+  columns and LAS aggregates populate correctly.
+- Performance check (the risk flagged for hand-rolling instead of using
+  pymoo's SMSEMOA): timed optimise_block_nsga2 vs optimise_block_smsemoa
+  on the same 6-qubit two-cluster test circuit at the sweep's real
+  generations=100/pop_size=100 settings -- NSGA-II 10.7s, SMS-EMOA 8.2s.
+  No performance blocker at this scale; the boundary-front
+  hypervolume-trim cost did not materialize as a problem.
+
+Recommended experiment design (not a full factorial grid -- 600+ runs
+across block_algorithm x mutation_scheme x hybrid_las x injection_method
+x 5 circuits x 5 seeds would be too large for the remaining laptop-only
+budget). Three staged, single-axis sweeps instead, each via run_sweep.py
+with one override flag, fixing injection_method=stochastic throughout
+(already shown to dominate in the existing 8q dataset):
+  (a) Algorithm comparison: nsga2 vs smsemoa, mutation_scheme=point,
+      hybrid_las=False -> 2 x 5 circuits x 5 seeds = 50 runs.
+  (b) Mutation ablation: fix block_algorithm to (a)'s winner, vary
+      mutation_scheme -> 3 x 5 x 5 = 75 runs.
+  (c) Hybrid LAS ablation: fix block_algorithm/mutation_scheme to the
+      prior winners, vary hybrid_las -> 2 x 5 x 5 = 50 runs.
+Total ~175 runs vs. 600+ for a full factorial. Not yet run -- next step
+is to actually execute (a), then (b), then (c) and update
+runs/results_master.csv + this log with findings.
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master

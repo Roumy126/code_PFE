@@ -22,7 +22,8 @@ import pandas as pd
 
 CONFIG_FIELDS = [
     "run_id", "circuit", "n_qubits", "depth", "twoq_gates_total",
-    "connectivity_edges", "injection_method", "fid_threshold", "sa_iters",
+    "connectivity_edges", "injection_method", "block_algorithm", "mutation_scheme",
+    "hybrid_las", "fid_threshold", "sa_iters",
     "generations", "pop_size", "qubit_duplication_threshold", "seed",
 ]
 
@@ -45,6 +46,10 @@ def _moo_aggregates(moo_metrics_per_block):
         row[f"mean_{metric.lower()}"] = sum(values) / len(values) if values else None
     n_pareto = [b["n_pareto"] for b in moo_metrics_per_block if b.get("n_pareto") is not None]
     row["total_n_pareto"] = sum(n_pareto) if n_pareto else None
+    row["n_blocks_hybrid_las_applied"] = sum(1 for b in moo_metrics_per_block if b.get("las_applied"))
+    for field in ("fidelity_before_las", "fidelity_after_las"):
+        values = [b[field] for b in moo_metrics_per_block if b.get(field) is not None]
+        row[f"mean_{field}"] = sum(values) / len(values) if values else None
     return row
 
 

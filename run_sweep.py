@@ -84,6 +84,15 @@ CIRCUIT_QUBIT_SIZES = {
 }
 
 INJECTION_METHODS = ["stochastic", "sa"]
+
+# Default to the current baseline choice for each new axis, so a plain `python
+# run_sweep.py` invocation stays behavior-unchanged. Override one axis at a time via
+# the CLI flags below for the staged algorithm/mutation/hybrid-LAS comparisons (see
+# logs.txt) instead of sweeping the full factorial, which would be 600+ runs.
+BLOCK_ALGORITHMS = ["nsga2"]
+MUTATION_SCHEMES = ["point"]
+HYBRID_LAS_OPTIONS = [False]
+
 N_SEEDS = 5  # roadmap ultimately wants 10-20 seeds per config for review
 
 GENERATIONS = 100
@@ -99,21 +108,29 @@ POP_SIZE = 100
 LARGE_N_THRESHOLD = 10
 
 
-def build_grid(circuits, n_qubits_override, injection_methods, n_seeds):
+def build_grid(circuits, n_qubits_override, injection_methods, n_seeds,
+                block_algorithms=BLOCK_ALGORITHMS, mutation_schemes=MUTATION_SCHEMES,
+                hybrid_las_options=HYBRID_LAS_OPTIONS):
     for circuit in circuits:
         sizes = n_qubits_override if n_qubits_override is not None else CIRCUIT_QUBIT_SIZES[circuit]
         for n_qubits in sizes:
             methods = [m for m in injection_methods if n_qubits <= LARGE_N_THRESHOLD or m != "sa"]
             for injection_method in methods:
-                for seed in range(n_seeds):
-                    yield {
-                        "circuit": circuit,
-                        "n_qubits": n_qubits,
-                        "injection_method": injection_method,
-                        "generations": GENERATIONS,
-                        "pop_size": POP_SIZE,
-                        "seed": seed,
-                    }
+                for block_algorithm in block_algorithms:
+                    for mutation_scheme in mutation_schemes:
+                        for hybrid_las in hybrid_las_options:
+                            for seed in range(n_seeds):
+                                yield {
+                                    "circuit": circuit,
+                                    "n_qubits": n_qubits,
+                                    "injection_method": injection_method,
+                                    "block_algorithm": block_algorithm,
+                                    "mutation_scheme": mutation_scheme,
+                                    "hybrid_las": hybrid_las,
+                                    "generations": GENERATIONS,
+                                    "pop_size": POP_SIZE,
+                                    "seed": seed,
+                                }
 
 
 def run_id_for(cfg: dict) -> str:
@@ -121,6 +138,7 @@ def run_id_for(cfg: dict) -> str:
     # any other swept knob) can't silently collide with a stale prior run.
     return (
         f"{cfg['circuit']}_{cfg['n_qubits']}q_{cfg['injection_method']}"
+        f"_{cfg['block_algorithm']}_{cfg['mutation_scheme']}_las{int(cfg['hybrid_las'])}"
         f"_g{cfg['generations']}_p{cfg['pop_size']}_seed{cfg['seed']}"
     )
 
@@ -133,6 +151,13 @@ def parse_args(argv=None):
                          "(default: each circuit's own CIRCUIT_QUBIT_SIZES entry).")
     p.add_argument("--injection-methods", choices=["sa", "stochastic"], nargs="+",
                     default=INJECTION_METHODS)
+    p.add_argument("--block-algorithms", choices=["nsga2", "smsemoa"], nargs="+",
+                    default=BLOCK_ALGORITHMS)
+    p.add_argument("--mutation-schemes", choices=["point", "swap_add", "swap_add_delete"],
+                    nargs="+", default=MUTATION_SCHEMES)
+    p.add_argument("--hybrid-las-options", type=int, choices=[0, 1], nargs="+",
+                    default=[int(v) for v in HYBRID_LAS_OPTIONS],
+                    help="0=pure GA, 1=hybrid GA+LAS. Pass both to sweep the axis.")
     p.add_argument("--n-seeds", type=int, default=N_SEEDS)
     p.add_argument("--runs-dir", default="runs")
     p.add_argument("--dry-run", action="store_true", help="Print the grid and exit.")
@@ -143,7 +168,12 @@ def main(argv=None):
     global _current_pgid
     args = parse_args(argv)
     runs_dir = Path(args.runs_dir)
-    grid = list(build_grid(args.circuits, args.n_qubits, args.injection_methods, args.n_seeds))
+    grid = list(build_grid(
+        args.circuits, args.n_qubits, args.injection_methods, args.n_seeds,
+        block_algorithms=args.block_algorithms,
+        mutation_schemes=args.mutation_schemes,
+        hybrid_las_options=[bool(v) for v in args.hybrid_las_options],
+    ))
 
     print(f"Sweep grid: {len(grid)} configurations")
     if args.dry_run:
@@ -166,10 +196,14 @@ def main(argv=None):
             "--circuit", cfg["circuit"],
             "--n-qubits", str(cfg["n_qubits"]),
             "--injection-method", cfg["injection_method"],
+            "--block-algorithm", cfg["block_algorithm"],
+            "--mutation-scheme", cfg["mutation_scheme"],
             "--generations", str(cfg["generations"]),
             "--pop-size", str(cfg["pop_size"]),
             "--seed", str(cfg["seed"]),
         ]
+        if cfg["hybrid_las"]:
+            cmd.append("--hybrid-las")
         print(f"[run]  {run_id}")
         # start_new_session=True makes this subprocess (and every worker it
         # spawns, e.g. joblib/loky) its own process group, so it can be torn

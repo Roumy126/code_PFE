@@ -92,6 +92,37 @@ def test_pipeline_runs_end_to_end_via_approximate_fidelity(tmp_path, monkeypatch
     assert meta["fidelity_backend"] == "swap_test_mc"
 
 
+@pytest.mark.parametrize("kwargs", [
+    dict(block_algorithm="smsemoa"),
+    dict(mutation_scheme="swap_add"),
+    dict(mutation_scheme="swap_add_delete"),
+    dict(hybrid_las=True),
+    dict(block_algorithm="smsemoa", mutation_scheme="swap_add_delete", hybrid_las=True),
+], ids=["smsemoa", "mutation_swap_add", "mutation_swap_add_delete", "hybrid_las", "smsemoa_combo"])
+def test_pipeline_new_algorithm_choices_run_end_to_end(tmp_path, monkeypatch, kwargs):
+    monkeypatch.chdir(tmp_path)
+    random.seed(0)
+    np.random.seed(0)
+
+    qc = _two_cluster_circuit()
+    qc_opt, meta = optimise_circuit_pipeline(
+        qc,
+        injection_method="stochastic",
+        fid_threshold=0.9,
+        generations=3,
+        pop_size=8,
+        qubit_duplication_threshold=0.6,
+        **kwargs,
+    )
+
+    assert qc_opt.num_qubits == qc.num_qubits
+    assert 0.0 <= meta["fidelity_final"] <= 1.0 + 1e-6
+    assert len(meta["moo_metrics_per_block"]) == len(meta["blocks"])
+    assert set(meta["stage_timings_s"]) == {
+        "partitioning", "block_optimization", "injection", "compression",
+    }
+
+
 @pytest.mark.parametrize("make_circuit", [
     lambda: qaoa_maxcut_circuit(n_qubits=6, p=1, seed=0),
     lambda: w_state_circuit(n_qubits=5, seed=0),
