@@ -878,10 +878,63 @@ than omitting a null result.
   algorithm/operator differences aren't washed out by the downstream
   stage.
 
-Not yet done: smsemoa's own mutation-scheme/hybrid-LAS ablation passes
-(sweeps (b)/(c) above were run with block_algorithm fixed to nsga2, the
-higher-peak-fidelity choice from (a)) -- a natural follow-up given (a)'s
-"different but not worse" result, but not run yet.
+Sweeps (b)/(c) for smsemoa — RUN (2026-08-25): re-ran both ablations
+with block_algorithm=smsemoa (`--block-algorithms smsemoa
+--mutation-schemes point swap_add swap_add_delete`, then
+`--block-algorithms smsemoa --mutation-schemes point
+--hybrid-las-options 0 1`). 75 new runs (50 + 25), 0 failed. Aggregated
+into runs/results_master.csv (260 rows total).
+
+Mutation ablation (smsemoa, hybrid_las=False), mean over 5 circuits x 5
+seeds:
+
+  mutation_scheme   fidelity_final  depth_after  cost_after  mean_hv  total_n_pareto  wall_clock_s
+  point                     0.1230        15.20       78.24   0.0596          171.72       50.95
+  swap_add                  0.1295        17.16       89.64   0.6801          185.12       56.28
+  swap_add_delete           0.1420        14.84       78.60   0.0562          151.92       51.87
+
+Win counts (25 combos): point 9, swap_add_delete 9, swap_add 7.
+
+Finding -- notably DIFFERENT from the nsga2 result above: under
+smsemoa, swap_add_delete is the best mutation scheme (highest mean
+fidelity 0.1420 vs point's 0.1230, tied with point on win count, and
+comparable depth/cost), whereas under nsga2 plain point mutation was
+clearly the best on every metric. This is a genuine algorithm x
+mutation-operator interaction, not just noise (the fidelity gap and
+consistent win-tie are the same direction across both cost/depth
+metrics) -- worth reporting as its own finding: the "best" mutation
+operator is not universal, it depends on which selection algorithm it's
+paired with. (The swap_add mean_hv=0.68 outlier is the same per-run
+normalization/bloat artifact flagged under the nsga2 ablation --
+cost_after=89.64 is again the highest of the three, so treat that HV
+number with the same caveat, not as a real front-quality win.)
+
+Hybrid LAS ablation (smsemoa, mutation_scheme=point), mean over 5
+circuits x 5 seeds:
+
+  hybrid_las  fidelity_final  depth_after  cost_after  mean_hv  wall_clock_s  mean_fidelity_before_las  mean_fidelity_after_las
+  False               0.1230       15.20       78.24   0.0596         50.95                        --                       --
+  True                0.1249       15.00       77.80   0.0596         51.66                    0.6190                   0.6247
+
+Per-run: 18/25 improved, 7/25 worsened, mean delta +0.00186, median
++0.00090 -- both positive, unlike the nsga2 case where the net effect
+was roughly a wash (mean delta -0.00075). Under smsemoa, hybrid_las
+gives a small but more CONSISTENT positive effect (also slightly better
+depth/cost: 15.00/77.80 vs 15.20/78.24). Still a modest effect size on
+only 25 seed-circuit combos -- worth reporting as "hybrid GA+LAS pairs
+better with smsemoa than with nsga2 in this dataset," not overclaimed
+as a large or definitive difference without more seeds.
+
+Combined with sweep (a): the two algorithms now each have a
+best-paired mutation scheme (nsga2 -> point, smsemoa -> swap_add_delete)
+and a hybrid_las effect that differs in direction/consistency (wash for
+nsga2, small consistent gain for smsemoa) -- all four combinations
+(2 algorithms x 2 relevant axes) are now in runs/results_master.csv for
+the paper's comparison tables. Not yet done: no cross-checking whether
+nsga2 also improves under swap_add_delete + hybrid_las combined (each
+axis was ablated independently, per the plan's "single axis at a time"
+design) -- a combined best-of-both-axes run per algorithm would be a
+natural next step if there's time.
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master

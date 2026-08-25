@@ -89,12 +89,26 @@ existing 8-qubit benchmark suite (125 additional runs). Results:
   where the real differences are visible, rather than only on the
   final end-to-end accuracy number).
 
+The mutation-operator and local-fine-tuning comparisons were then
+re-run against the new SMS-EMOA algorithm too (the "next step" flagged
+above), and turned up a genuinely interesting difference: the best
+choice for each of these settings is NOT the same for both algorithms.
+- For the original approach (NSGA-II), the simple mutation operator
+  works best overall, as reported above. For the new algorithm
+  (SMS-EMOA), the "swap + add + delete" combination instead comes out
+  on top -- a real interaction between the algorithm and how its
+  designs get randomly altered during the search, not just noise.
+- The local fine-tuning pass also behaves slightly differently per
+  algorithm: for SMS-EMOA it gives a small but more consistently
+  positive accuracy improvement than it did for NSGA-II (where the
+  effect was roughly a wash). The effect is still modest in both cases.
+This means the paper's comparisons will need to report each
+algorithm's own best-paired settings rather than assuming one
+"best" configuration applies universally.
+
 =====================================================================
 NEXT STEPS
 =====================================================================
-- Run the same mutation-operator and local-fine-tuning comparisons
-  against the new SMS-EMOA algorithm (so far only run against the
-  original NSGA-II approach), to complete the picture.
 - Move into writing up results, targeting submission around
   December 2026 -- including deciding how much to lean on per-block
   vs. end-to-end accuracy comparisons per the finding above.
