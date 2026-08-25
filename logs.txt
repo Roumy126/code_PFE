@@ -2,7 +2,9 @@ PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
 Last updated: 2026-08-25 (research scope pivoted to a fixed 8-qubit
 benchmark set for now; scaling to larger qubit counts is deferred to a
-later phase -- see "SCALING — DEFERRED" note after Phase 2 below)
+later phase -- see "SCALING — DEFERRED" note after Phase 2 below; also
+resolved and fixed the NSGA-III open item -- see "OPEN ITEM — RESOLVED"
+below)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -175,13 +177,61 @@ alongside __pycache__/, *.pyc, .ipynb_checkpoints/) — never edit files
 inside them.
 
 =====================================================================
-OPEN ITEM
+OPEN ITEM — RESOLVED (2026-08-25)
 =====================================================================
-- Confirm status of the NSGA-III implementation in this fork
-  (NSGA-III/AG_multi_objectifs_NSGA3.ipynb exists on disk as of this
-  log, but was reported missing relative to a version built together
-  in a prior session — needs a diff/comparison against that prior
-  version to determine what, if anything, is actually missing).
+Confirmed status of the NSGA-III implementation in this fork
+(NSGA-III/AG_multi_objectifs_NSGA3.ipynb):
+- git history shows the notebook was added wholesale in commit
+  2e445cef ("[ULBS] init", 2026-08-10) and only re-executed (cell
+  outputs only, no code change) in 62ca0e8e. It exists ONLY on the
+  ULBS_qiea branch (current branch) -- completely absent from main.
+  That branch gap is the most likely reason it was reported "missing":
+  whatever was being compared against was probably a main checkout,
+  which never received this file.
+- Read through the full implementation (34 cells) and ran it as a
+  smoke test (.venv, pop_size=8, generations=3-4, Agg backend). It is
+  a genuine, correct, hand-rolled NSGA-III (Deb & Jain, 2014): Das &
+  Dennis reference points (generate_reference_points), ASF-based
+  extreme-point normalization with a nadir-point fallback for the
+  degenerate-hyperplane case (normalize_objectives), perpendicular-
+  distance reference-point association (associate_to_reference_points),
+  and niching-based environmental selection (niching_selection) that
+  matches the paper's Algorithm 4/5 exactly, including normalizing
+  over St (already-accepted + last front) rather than the whole
+  population. Not DEAP's built-in selNSGA3 -- independently
+  implemented. No correctness bugs found.
+- Fixed 4 minor issues found during review, all in
+  NSGA-III/AG_multi_objectifs_NSGA3.ipynb:
+  1. mutate()'s structural insert/delete mutation used a hardcoded 0.1
+     probability, ignoring the mutation_rate parameter -- only the
+     gene-level mutation actually scaled with it. Now both mutation
+     types are governed by mutation_rate.
+  2. Gene tuple order was [target_qubit, gate, control, angle] (kept
+     from the older NSGA-II notebook it was adapted from), inconsistent
+     with the (gate_name, target_qubit, ctrl, angle) convention used in
+     M1_finale and documented in CLAUDE.md. Reordered to
+     [gate, target_qubit, control, angle] in generate_gene,
+     create_quantum_circuit, and compute_circuit_cost, plus the
+     markdown cell describing the encoding.
+  3. Removed leftover `pip install qiskit/pylatexenc/matplotlib` cells
+     (notebook now relies on the project's requirements.txt-based
+     .venv like everything else).
+  4. parallel_evaluation spawned a fresh joblib worker pool on every
+     call (twice per generation, ~400 times over a 200-generation
+     run). multi_objective_genetic_algorithm_nsga3 now opens a single
+     `with Parallel(n_jobs=-1) as parallel:` block spanning the whole
+     run and passes it through, reusing one pool instead of repeatedly
+     paying process-pool startup cost.
+  Verified after the fixes with the same smoke test: output is
+  byte-identical to the pre-fix run at generations 1-3 (mutation_rate
+  defaults to 0.1, matching the old hardcoded value, so behavior is
+  unchanged at default settings) and continues running cleanly past
+  that with no errors.
+- Not done: no diff against "a version built together in a prior
+  session" -- that prior-session context/version was not available to
+  compare against here. If that version turns up, it's still worth a
+  diff, but on its own this fork's copy is confirmed complete and
+  correct.
 
 =====================================================================
 NEXT STEPS — CANDIDATE MOO ALGORITHMS TO ADD
