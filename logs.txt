@@ -823,10 +823,65 @@ this ablation was designed to test:
   any cross-scheme HV comparison would need a shared (not per-run)
   normalization/reference point to be trustworthy.
 
-Next: run sweep (c) (hybrid LAS ablation, nsga2 x point, hybrid_las
-False vs True), then revisit whether smsemoa should also get its own
-mutation/LAS ablation pass given sweep (a)'s "different but not worse"
-result.
+Sweep (c) — hybrid GA+LAS ablation — RUN (2026-08-25): 25/25 new runs
+succeeded (`python run_sweep.py --injection-methods stochastic
+--block-algorithms nsga2 --mutation-schemes point --hybrid-las-options
+0 1`; the other 25 of the 50-config grid, hybrid_las=False, were
+already done). Aggregated into runs/results_master.csv (185 rows
+total). Mean over all 5 circuits x 5 seeds, block_algorithm=nsga2,
+mutation_scheme=point:
+
+  hybrid_las  fidelity_final  depth_after  cost_after  wall_clock_s  mean_fidelity_before_las  mean_fidelity_after_las
+  False               0.1491        16.04       82.12       52.41                         --                       --
+  True                0.1484        16.04       82.32       51.72                     0.6415                   0.6471
+
+Per-run comparison (paired by circuit+seed): 16/25 improved final
+fidelity, 9/25 worsened it, mean delta -0.00075, median delta +0.00071
+-- essentially a wash, not a clear win either direction.
+
+Finding: hybrid_las DOES nudge per-block fidelity up on average
+(0.6415 -> 0.6471, ~+0.9% relative, applied to ~2.88 blocks/run on
+average -- matches n_blocks per run) -- so update_rotation_angles
+(LAS) works as intended at the block level. But this per-block gain
+does NOT propagate to the final circuit's fidelity_final in any
+consistent direction. Root cause, tying back to the Phase 2 injection-
+path finding above: fidelity_driven_injection (the always-run greedy
+pass) wins 48/50 baseline runs and its own optimization dominates the
+final fidelity number regardless of how good the pre-injection block
+circuits were -- so a modest, block-local LAS improvement gets
+overwritten by whichever injection-stage gates end up added. This is
+itself a useful negative result for the paper ("hybrid GA+LAS improves
+intra-block optimization quality in isolation, but its effect is
+masked by the injection stage at this fidelity regime") rather than a
+failure of the LAS implementation -- worth stating explicitly rather
+than omitting a null result.
+
+=== Summary across sweeps (a)/(b)/(c): 125 total new + reused runs ===
+- (a) NSGA-II beats SMS-EMOA on peak fidelity but SMS-EMOA gives a
+  larger/more-diverse Pareto front at no wall-clock cost -- report both
+  as complementary, not a strict winner.
+- (b) point mutation remains the best default; swap_add_delete beats
+  swap_add (matching the GECCO 2025 source), demonstrating the
+  addition/deletion balance point without beating the baseline.
+- (c) hybrid GA+LAS measurably improves block-local fidelity but that
+  gain doesn't survive into final circuit fidelity at this problem's
+  regime, because the injection stage's greedy pass dominates the
+  final number -- a paper-worthy negative result, not a bug.
+- Common thread: block-optimization-stage choices (algorithm, mutation,
+  hybrid LAS) have SECONDARY effects on final circuit fidelity compared
+  to the injection stage's own greedy optimization, at the current
+  8-qubit / sub-0.9999-fidelity regime. Worth stating as a paper
+  finding in its own right, and worth considering whether the paper's
+  headline comparison should be reported on a block-optimization-stage
+  metric (e.g. per-block fidelity/HV, already in moo_metrics_per_block)
+  rather than only on end-to-end fidelity_final, so these real
+  algorithm/operator differences aren't washed out by the downstream
+  stage.
+
+Not yet done: smsemoa's own mutation-scheme/hybrid-LAS ablation passes
+(sweeps (b)/(c) above were run with block_algorithm fixed to nsga2, the
+higher-peak-fidelity choice from (a)) -- a natural follow-up given (a)'s
+"different but not worse" result, but not run yet.
 
 Phase 3 — paper writing (November-December) — NOT STARTED
   - Generate all figures/tables directly from the Phase 1 master
