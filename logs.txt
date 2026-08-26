@@ -1004,10 +1004,28 @@ qaoa_maxcut_13q_sa_..._ifet13, completed in 495.6s (matches the
 confirming the flag actually reaches the pipeline's fidelity backend
 selection correctly). Full pytest smoke suite (11 tests) still passes.
 
-Not yet done: the full n=12 grid (5 circuits x 5 seeds = 25 runs,
-extrapolated ~1 hour from the pilot's ~141s/run average) and any
-broader n=13 sweep -- pilot was intentionally kept small to validate
-viability before committing to the larger time cost.
+Full n=12 grid — RUN (2026-08-26): `python run_sweep.py --n-qubits 12
+--injection-methods stochastic --n-seeds 5` -> 20 run, 5 skipped
+(already done by the pilot above), 0 failed (of 25 total). Folded into
+runs/results_master.csv (285 rows total). Per-circuit means over 5
+seeds each:
+
+  circuit               mean_wall_clock_s  mean_fidelity_final  mean_depth_after  mean_cost_after
+  w_state                       80.4               0.075              14.2            103.0
+  hw_efficient_ansatz           94.0               0.036              15.6            101.4
+  qaoa_maxcut                  125.3               0.055              12.4             66.4
+  weak_random                  181.1               0.387              11.2            106.4
+  qft                          241.8               0.017              35.6            211.2
+
+Overall mean 144.5s/run (matches the pilot's ~141s estimate closely).
+qft is consistently the slowest and lowest-fidelity family (matches
+its known high entanglement); weak_random is the fastest/highest-
+fidelity, consistent with the low-connectivity design intent. Not yet
+compared against the existing 8-qubit dataset's per-circuit numbers or
+run for n=13 at full seed count -- both natural next steps if scaling
+work continues, otherwise this dataset stands as confirmation that the
+12-qubit tier is now practical end-to-end at the current fidelity
+regime.
 
 =====================================================================
 RESEARCH ANGLE CHOSEN AND IMPLEMENTED: SMS-EMOA + operator/hybrid

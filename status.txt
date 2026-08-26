@@ -1,8 +1,9 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
 Date: 2026-08-26 (added: all three root causes of the scaling stall
-now found and fixed, all with verified zero behavior change; real
-12/13-qubit runs now complete end-to-end -- see CURRENT STATUS)
+now found and fixed, all with verified zero behavior change; a full
+25-run 12-qubit sweep across all 5 circuit families completed cleanly
+-- see CURRENT STATUS)
 
 =====================================================================
 OBJECTIVE
@@ -133,14 +134,16 @@ NEXT STEPS
 - Revisit scaling past 8 qubits as a follow-on effort (not on the
   critical path for the first submission) -- all three known cost
   bottlenecks in the re-injection stage are now fixed; 12- and
-  13-qubit runs complete end-to-end. A small real pilot (5 circuit
-  types, real full-length settings, 12 qubits) confirmed this
-  in practice: every run succeeded, averaging ~2.3 minutes each. A
-  full 25-run sweep at 12 qubits (5 circuit types x 5 repeats) is
-  estimated at roughly an hour and has not been run yet -- next step
-  if scaling work continues. The remaining blocker before pushing
-  past ~13-14 qubits is the deeper accuracy-computation problem noted
-  in IMPLEMENTATION NOTES.
+  13-qubit runs complete end-to-end. A full 25-run sweep (5 circuit
+  types x 5 repeats) at 12 qubits, at full/production settings, has
+  now been run: every run succeeded (0 failures), averaging 2.4
+  minutes each, ranging from ~1.3 min (fastest circuit type) to ~4
+  min (slowest, the most entangled one). This is real evidence the
+  12-qubit tier is now practical to work with, not just theoretically
+  unblocked. Not yet done: the same full sweep at 13 qubits, and a
+  side-by-side comparison against the existing 8-qubit results. The
+  remaining blocker before pushing past ~13-14 qubits is the deeper
+  accuracy-computation problem noted in IMPLEMENTATION NOTES.
 - Since the fixed strategies are now far cheaper (especially
   simulated annealing), it may be worth re-comparing them against
   each other at 8 qubits too -- the earlier finding that simulated
