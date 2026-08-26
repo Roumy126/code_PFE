@@ -1,16 +1,20 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-26 (found and fixed the root cause of one of the
-two scaling stalls noted in "SCALING — DEFERRED" below -- sa_injection
-was re-simulating its own unchanged base circuit on every SA iteration;
-replaced with an exact closed-form shortcut, ~1000x+ speedup, verified
-bit-identical behavior -- see "SCALING — SA INJECTION FAST PATH FOUND
-AND FIXED" right after the deferral note. Previously (2026-08-25):
-research scope pivoted to a fixed 8-qubit benchmark set for now;
-resolved and fixed the NSGA-III open item -- see "OPEN ITEM — RESOLVED"
-below; and chose + implemented the research contribution angle --
-SMS-EMOA plus mutation/hybrid-LAS ablations -- see "RESEARCH ANGLE
-CHOSEN AND IMPLEMENTED" after the scaling notes)
+Last updated: 2026-08-26 (fixed the second of the two scaling-stall
+mechanisms too -- fidelity_driven_injection was rebuilding+resimulating
+a dense operator from scratch on every one of its up to 300 trials per
+run; replaced with a cached-operator partial-trace fast path, verified
+exact, ~40x-and-growing speedup, turns previously-hanging 12/13-qubit
+runs into 26s/143s -- see "SCALING — FIDELITY-DRIVEN INJECTION FAST
+PATH FOUND AND FIXED" right after the SA fast-path note. Earlier the
+same day: found and fixed the sa_injection stall the same way (exact
+closed-form shortcut, ~1000x+ speedup) -- see "SCALING — SA INJECTION
+FAST PATH FOUND AND FIXED" right after "SCALING — DEFERRED" below.
+Previously (2026-08-25): research scope pivoted to a fixed 8-qubit
+benchmark set for now; resolved and fixed the NSGA-III open item -- see
+"OPEN ITEM — RESOLVED" below; and chose + implemented the research
+contribution angle -- SMS-EMOA plus mutation/hybrid-LAS ablations --
+see "RESEARCH ANGLE CHOSEN AND IMPLEMENTED" after the scaling notes)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -755,6 +759,105 @@ it does not lift the 8-qubit benchmark ceiling on its own. Revisiting
 the 12+ qubit sweep would still need a similar investigation into
 fidelity_driven_injection's cost before it could actually run to
 completion at that scale.
+
+=====================================================================
+SCALING — FIDELITY-DRIVEN INJECTION FAST PATH FOUND AND FIXED
+(2026-08-26)
+=====================================================================
+Followed up on the open item flagged at the end of the sa_injection fix
+above: fidelity_driven_injection (the greedy pass that always runs and
+dominates 48/50 baseline outcomes per Phase 2) was profiled directly
+rather than assumed. Confirmed it is a genuine second bottleneck, and
+found a different (non-identical, but related) closed-form shortcut
+than the sa_injection one.
+
+Profiling: a single trial of fidelity_driven_injection (one
+safe_fidelity_between_circuits call inside its loop) took ~4.2s at
+n=11. At the function's default max_trials=300, that is ~21 minutes at
+n=11 alone, worse at higher n -- consistent with, and now explaining,
+part of the multi-hour stalls from "SCALING — DEFERRED" above.
+
+Why this one does NOT reduce the same way as sa_injection: sa_injection
+always compared a candidate against its own unchanged base (target_qc
+is base_qc, literally the same object), so the base cancelled out of
+the trace exactly. fidelity_driven_injection compares against the true
+original target_qc, called as
+fidelity_driven_injection(base_qc=qc_rebuilt_original_qubits,
+target_qc=qc_orig, ...) -- base_qc and target_qc are genuinely
+different circuits (per-block re-optimization replaced base_qc's
+internal block gates), so there is no algebraic cancellation and no
+constant-time closed form.
+
+What DOES reduce, found by re-examining the loop's actual structure:
+every trial only ever appends ONE gate to the CURRENT candidate_qc
+(U_test = G_trial @ U_candidate), and candidate_qc only changes on
+acceptance (rare relative to max_trials). So:
+- Cache M = U_candidate @ U_target^dagger once (an expensive, O(4^n)-
+  ish dense build) rather than rebuilding+resimulating a full circuit
+  comparison on every trial.
+- Each trial's fidelity is then a partial trace of the CACHED M over
+  just the 2 qubits the trial's gate touches, via the standard
+  identity Tr((G_loc embedded) @ M) = Tr(G_loc @ R) where R is M's
+  partial trace onto those 2 qubits -- a 4x4 matrix trace, independent
+  of n. New helper: _partial_trace_reduce(M, n, keep_qubits).
+- On acceptance, M does not need rebuilding from scratch either: since
+  M = U_candidate @ U_target^dagger and U_candidate_new = G_embedded @
+  U_candidate, algebraically M_new = G_embedded @ M_old. New helper
+  _apply_local_gate_to_operator(M, n, G_loc, q1, q2) applies this via
+  a tensor contraction (reshape + moveaxis + small matmul) instead of
+  building the full 2^n x 2^n embedded gate matrix, at a cost that
+  does NOT grow as the accepted circuit gets deeper (unlike rebuilding
+  Operator(candidate_qc), which resimulates the whole, ever-growing
+  circuit from scratch every time).
+- Both helpers are exact linear algebra, not approximations. Used only
+  when n <= fidelity_exact_threshold (matching the existing exact/
+  SWAP-test-MC branch point in safe_fidelity_between_circuits); falls
+  back to the original per-trial simulated path above that threshold.
+
+Bug caught during implementation, worth recording: the first version
+of both helpers had a qubit-ordering bug that only showed up on
+asymmetric gates (cx) -- symmetric gates (cz, rzz) matched immediately
+on the first attempt, masking the bug for half the gate pool. Root
+cause: Qiskit's little-endian convention (qubit 0 = LSB) means the
+*first* qubit named in a 2-qubit gate call maps to the *last*/most-
+significant axis position when embedding into a larger tensor, not the
+first -- both helpers needed keep_qubits reversed relative to the
+naive ordering. Caught by testing against qiskit's own gate embedding
+directly rather than trusting the derivation, exactly as with the
+earlier _injections_self_fidelity work.
+
+Verified:
+- kept_injections list byte-identical to the original per-trial-
+  simulated version (n=9, 40 trials, both list the same 9 gates with
+  the same angles in the same order).
+- n=9, 40 trials: 6.60s (original) -> 0.80s (partial-trace fast path
+  only) -> 0.17s (+ incremental M update) -- ~39x total.
+- n=12, 300 trials (the function's real default): 25.85s -- the same
+  configuration that previously did not complete within a 300s bound.
+- n=13, 300 trials: 143.23s -- also previously did not complete within
+  300s.
+- Full pytest smoke suite (11 tests): all pass, no behavior change, no
+  new warnings.
+
+Scope: this removes the O(max_trials) redundant-simulation cost, but
+NOT the one-time O(4^n)-ish cost of the initial Operator(candidate_qc)/
+Operator(target_qc) builds at the start of the function -- that part
+is unavoidable at the exact-fidelity tier and is why n=13 (143s) is
+still meaningfully slower than n=12 (26s). This does not touch the
+separate n~14-15 wall from the SWAP-test/MPS backend documented in the
+sa_injection fix's context above (statevector-based swap test hits a
+hard 31-total-qubit cap; MPS is exponential in entanglement, not qubit
+count) -- circuits past roughly n=13-14 still need that problem solved
+separately before a 12+ qubit sweep could run to completion end-to-end.
+
+Combined effect of both fixes (sa_injection + fidelity_driven_injection):
+the two injection strategies that dominate the pipeline's per-run cost
+at the current fidelity_exact_threshold tier are both now either near-
+free (sa_injection) or bounded mainly by a one-time build cost rather
+than per-trial cost (fidelity_driven_injection), rather than by
+redundant re-simulation. Retrying the 12+ qubit sweep is now more
+plausible than before, though not yet attempted -- the statevector/MPS
+wall above n~13-14 remains the next thing to solve if that's revisited.
 
 =====================================================================
 RESEARCH ANGLE CHOSEN AND IMPLEMENTED: SMS-EMOA + operator/hybrid

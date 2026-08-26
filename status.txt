@@ -1,7 +1,7 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-08-26 (added: one root cause of the scaling stall found and
-fixed, ~1000x speedup with verified zero behavior change -- see
+Date: 2026-08-26 (added: both root causes of the scaling stall now
+found and fixed, both with verified zero behavior change -- see
 CURRENT STATUS)
 
 =====================================================================
@@ -50,11 +50,25 @@ same energies, same decisions, same output), and turns a run that
 previously didn't finish in 10 minutes into one that finishes in
 under a second at the same settings; at the settings the pipeline
 actually uses by default, a 14- and 20-qubit run that used to hang
-for hours each now complete in about 7 seconds. This does not by
-itself lift the 8-qubit ceiling -- a second re-injection strategy
-(the greedy one, which currently dominates the final result) has a
-similar-looking cost problem that has not yet been investigated the
-same way.
+for hours each now complete in about 7 seconds.
+
+Update 2: did the same investigation for the other re-injection
+strategy (the greedy one, which currently dominates the final result
+per the finding below). Its problem was different -- it was rebuilding
+and re-checking the ENTIRE candidate circuit's accuracy from scratch
+on every one of up to 300 attempts per run, when only a cached,
+reusable version of that check plus a small local update was actually
+needed each time. Fixed the same way: verified the new version gives
+the exact same accepted/rejected list as before, then measured the
+speedup. A 12-qubit run that previously did not finish in 5 minutes
+now completes in 26 seconds; a 13-qubit run, previously also stuck,
+completes in about 2.5 minutes. Both re-injection strategies are now
+fixed. What's left before larger circuits are practical again is a
+separate, deeper problem: past roughly 13-14 qubits, even a single
+accuracy check itself (independent of how many times it's called)
+becomes too slow by other means already known about (see
+IMPLEMENTATION NOTES) -- these two fixes remove the "calling it too
+many times" problem but not that one.
 
 Research contribution chosen and implemented: a second per-block
 algorithm, SMS-EMOA (optimizes for a diverse set of good trade-off
@@ -91,13 +105,19 @@ NEXT STEPS
 =====================================================================
 - Move into results write-up, targeting ~December 2026 submission.
 - Revisit scaling past 8 qubits as a follow-on effort (not on the
-  critical path for the first submission) -- one cost bottleneck is
-  now fixed (see above); the greedy re-injection strategy's cost at
-  larger qubit counts is the next thing to investigate there.
-- Since the fixed strategy (simulated annealing) is now far cheaper,
-  it may be worth re-comparing it against the other one at 8 qubits
-  too -- the earlier finding that it "wasn't worth its cost" was
-  measured before this fix.
+  critical path for the first submission) -- both known cost
+  bottlenecks in the re-injection stage are now fixed; a 12- and
+  13-qubit run can complete end-to-end for the first time. The
+  remaining blocker before pushing further is the deeper accuracy-
+  computation problem noted in IMPLEMENTATION NOTES, past ~13-14
+  qubits.
+- Since the fixed strategies are now far cheaper (especially
+  simulated annealing), it may be worth re-comparing them against
+  each other at 8 qubits too -- the earlier finding that simulated
+  annealing "wasn't worth its cost" was measured before this fix.
+- Worth trying a real 12/13-qubit sweep now that both fixes are in,
+  to see how far the benchmark suite can actually be pushed before
+  hitting the remaining accuracy-computation wall.
 
 =====================================================================
 IMPLEMENTATION NOTES
