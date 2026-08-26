@@ -1,6 +1,8 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-08-26
+Date: 2026-08-26 (added: one root cause of the scaling stall found and
+fixed, ~1000x speedup with verified zero behavior change -- see
+CURRENT STATUS)
 
 =====================================================================
 OBJECTIVE
@@ -34,7 +36,25 @@ connected, QAOA MaxCut, W-state, QFT, hardware-efficient ansatz),
 fixed at 8 qubits. Pushing to 12-20 qubits repeatedly hit
 performance walls (hangs / 1hr+ runs) on genuinely entangled
 circuits (QAOA-style) -- paused and deferred rather than debugged
-further now; see NEXT STEPS.
+further at the time; see NEXT STEPS.
+
+Update: profiled where those stalls actually came from (rather than
+continuing to guess) and found one clear, fixable cause -- one of the
+two re-injection strategies (simulated annealing) was repeatedly
+re-checking its own starting circuit's accuracy from scratch,
+thousands of times per run, even though that check's answer never
+actually depended on the starting circuit at all. Replaced it with a
+direct calculation that skips the redundant work entirely. Verified
+this gives the exact same result as before (not an approximation --
+same energies, same decisions, same output), and turns a run that
+previously didn't finish in 10 minutes into one that finishes in
+under a second at the same settings; at the settings the pipeline
+actually uses by default, a 14- and 20-qubit run that used to hang
+for hours each now complete in about 7 seconds. This does not by
+itself lift the 8-qubit ceiling -- a second re-injection strategy
+(the greedy one, which currently dominates the final result) has a
+similar-looking cost problem that has not yet been investigated the
+same way.
 
 Research contribution chosen and implemented: a second per-block
 algorithm, SMS-EMOA (optimizes for a diverse set of good trade-off
@@ -71,7 +91,13 @@ NEXT STEPS
 =====================================================================
 - Move into results write-up, targeting ~December 2026 submission.
 - Revisit scaling past 8 qubits as a follow-on effort (not on the
-  critical path for the first submission).
+  critical path for the first submission) -- one cost bottleneck is
+  now fixed (see above); the greedy re-injection strategy's cost at
+  larger qubit counts is the next thing to investigate there.
+- Since the fixed strategy (simulated annealing) is now far cheaper,
+  it may be worth re-comparing it against the other one at 8 qubits
+  too -- the earlier finding that it "wasn't worth its cost" was
+  measured before this fix.
 
 =====================================================================
 IMPLEMENTATION NOTES

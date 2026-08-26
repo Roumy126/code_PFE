@@ -1,12 +1,16 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-25 (research scope pivoted to a fixed 8-qubit
-benchmark set for now; scaling to larger qubit counts is deferred to a
-later phase -- see "SCALING — DEFERRED" note after Phase 2 below; also
+Last updated: 2026-08-26 (found and fixed the root cause of one of the
+two scaling stalls noted in "SCALING — DEFERRED" below -- sa_injection
+was re-simulating its own unchanged base circuit on every SA iteration;
+replaced with an exact closed-form shortcut, ~1000x+ speedup, verified
+bit-identical behavior -- see "SCALING — SA INJECTION FAST PATH FOUND
+AND FIXED" right after the deferral note. Previously (2026-08-25):
+research scope pivoted to a fixed 8-qubit benchmark set for now;
 resolved and fixed the NSGA-III open item -- see "OPEN ITEM — RESOLVED"
 below; and chose + implemented the research contribution angle --
 SMS-EMOA plus mutation/hybrid-LAS ablations -- see "RESEARCH ANGLE
-CHOSEN AND IMPLEMENTED" after the scaling note)
+CHOSEN AND IMPLEMENTED" after the scaling notes)
 
 =====================================================================
 PROJECT OVERVIEW
@@ -648,6 +652,109 @@ CIRCUIT_QUBIT_SIZES was reset to [8] for every circuit (was still
 defaulting to 12/16/20q, which would have silently resumed the paused
 large-qubit sweep on the next run) -- pass --n-qubits to override for a
 one-off run past 8 qubits.
+
+=====================================================================
+SCALING — SA INJECTION FAST PATH FOUND AND FIXED (2026-08-26)
+=====================================================================
+Revisited the 12+ qubit stall from "SCALING — DEFERRED" above, this
+time by profiling instead of guessing. Root cause, isolated empirically
+before touching any code:
+
+- compute_fidelity's dense-Operator cost is exponential in qubit count
+  regardless of entanglement (expected) -- but the SWAP-test/MPS
+  estimator added during the deferred scaling work turned out to be
+  exponential in entanglement, not qubit count. A single swap-test call
+  on a genuinely entangled 10-qubit QAOA circuit hung for 5+ minutes
+  (measured against a code comment claiming ~0.06-0.08s, validated only
+  for the weakly-connected circuit family, not entangled ones).
+- Bond-dimension-capping the MPS backend (an obvious first fix) turned
+  out to be a bad tradeoff on this circuit family: even bond=128
+  (12s/call) was still 0.03-0.05 off the true fidelity, and the cheap
+  bond dims (16-32, sub-second) were off by 0.10-0.15 -- far too
+  imprecise for the injection stage's fid_threshold=0.999 accept/reject
+  decision. Rejected in favor of investigating further.
+- Switching the swap-test backend to exact statevector simulation was
+  strictly better than MPS (exact, not approximate; also faster at low
+  n) but hits its own hard wall at n~14-15 (2n+1 > 31 total qubits,
+  independent of entanglement) -- and even below that wall, accounting
+  for the pipeline's samples=8 Monte-Carlo averaging, a single fidelity
+  call already reached ~14s at n=12 and ~4 minutes at n=14. With
+  sa_injection's default n_iters=2000, that's 8+ hours at n=12 alone --
+  no backend swap fixes this on its own.
+- The actual fix: sa_injection's energy function (_sa_energy) always
+  calls safe_fidelity_between_circuits(cand, target_qc, ...) with
+  target_qc being the exact same object as base_qc (sa_injection calls
+  it as _sa_energy(..., base=base_qc, target_qc=base_qc, ...)), and
+  cand is always base_qc with the currently-enabled injection gates
+  appended on top. Algebraically, U_cand @ U_base^dagger = product of
+  the enabled injection gates exactly -- base_qc cancels out regardless
+  of its size, structure, or entanglement. So the "exact" fidelity this
+  loop was simulating on every one of its up to ~2030 iterations
+  (30 temperature-sampling + n_iters=2000 + 1 final check) was always
+  computable in closed form from a handful of qubits, without touching
+  base_qc's simulation at all. Verified empirically at n=9/11 (bit-
+  identical to the simulated result) before implementing.
+
+Implemented in M1_finale/final_m1_script.py:
+- New _injections_self_fidelity(injections, n_qubits): builds a tiny
+  local circuit over just the qubits the enabled injections touch,
+  computes |Tr(local unitary)| / 2^k directly via Operator -- no
+  simulation of base_qc, cost independent of total qubit count n.
+- _sa_energy now uses this fast path whenever target_qc is base
+  (Python identity check, matching sa_injection's actual calling
+  convention exactly), falling back to the original simulated path
+  otherwise so nothing breaks if that calling convention ever changes.
+- sa_injection's final post-loop fidelity check (previously another
+  safe_fidelity_between_circuits(final_circ, base_qc, ...) call) now
+  uses the same closed form for the same algebraic reason.
+
+Verified:
+- _sa_energy's fast path vs. the old simulated path (forced via a
+  distinct-object copy of base_qc to defeat the identity check):
+  bit-identical energy values.
+- Full sa_injection run, n=11, 200 iterations: pre-patch did not finish
+  in a 10-minute timeout; post-patch: 0.59s.
+- At the pipeline's actual defaults (n_iters=2000): n=14 -> 6.81s,
+  n=20 -> 6.28s -- this is the exact configuration that used to hang
+  for hours during the deferred scaling work.
+- Full pytest smoke suite (tests/test_pipeline_smoke.py, 11 tests):
+  all pass, no behavior change, no new warnings.
+
+Scope, explicitly checked and NOT extended:
+- fidelity_driven_injection compares candidate circuits against the
+  true original target_qc, which is structurally unrelated to the
+  candidate (built via independent per-block re-optimization) -- the
+  base cancellation trick does not apply; this remains a genuine global
+  fidelity computation with no cheap shortcut found yet.
+- stochastic_injection compares cand (= qc + one gate, then run through
+  compress_custom) against qc -- algebraically similar to the SA case,
+  but compress_custom's remove_negligible_rotations pass is NOT exactly
+  unitary-preserving, and its effect is largest exactly in the near-
+  zero-rotation-angle region where stochastic_injection's trials
+  actually get accepted (the only region where |Tr(gate)|/2^k is close
+  enough to 1.0 to pass fid_threshold=0.999 in the first place). A
+  closed-form shortcut here risked silently diverging from current
+  behavior in precisely the cases that matter, so it was left alone
+  rather than risk an unverified correctness change.
+
+Implication for the paper's injection-method finding (Phase 2 above,
+"sa is currently wasted compute -- it rarely changes the outcome and
+costs 3-6x more than stochastic"): that finding was measured against
+the old, cost-constrained SA. Now that SA is roughly 1000x cheaper and
+no longer bottlenecked by redundant simulation, it may be worth
+re-running the injection-method comparison -- SA can now afford far
+more iterations/candidates than before at the same wall-clock budget,
+which could change the outcome.
+
+Not resolved by this fix: the other scaling blocker from "SCALING —
+DEFERRED" above (fidelity_driven_injection's greedy pass, which always
+runs and dominates 48/50 baseline outcomes per Phase 2, and per-block
+NSGA-II/SMS-EMOA fidelity evaluation at higher n) is untouched -- this
+fix only removes sa_injection's specific redundant-simulation stall,
+it does not lift the 8-qubit benchmark ceiling on its own. Revisiting
+the 12+ qubit sweep would still need a similar investigation into
+fidelity_driven_injection's cost before it could actually run to
+completion at that scale.
 
 =====================================================================
 RESEARCH ANGLE CHOSEN AND IMPLEMENTED: SMS-EMOA + operator/hybrid
