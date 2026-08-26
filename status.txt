@@ -1,8 +1,8 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-08-26 (added: both root causes of the scaling stall now
-found and fixed, both with verified zero behavior change -- see
-CURRENT STATUS)
+Date: 2026-08-26 (added: all three root causes of the scaling stall
+now found and fixed, all with verified zero behavior change; real
+12/13-qubit runs now complete end-to-end -- see CURRENT STATUS)
 
 =====================================================================
 OBJECTIVE
@@ -60,15 +60,41 @@ on every one of up to 300 attempts per run, when only a cached,
 reusable version of that check plus a small local update was actually
 needed each time. Fixed the same way: verified the new version gives
 the exact same accepted/rejected list as before, then measured the
-speedup. A 12-qubit run that previously did not finish in 5 minutes
-now completes in 26 seconds; a 13-qubit run, previously also stuck,
-completes in about 2.5 minutes. Both re-injection strategies are now
-fixed. What's left before larger circuits are practical again is a
-separate, deeper problem: past roughly 13-14 qubits, even a single
-accuracy check itself (independent of how many times it's called)
-becomes too slow by other means already known about (see
-IMPLEMENTATION NOTES) -- these two fixes remove the "calling it too
-many times" problem but not that one.
+speedup.
+
+Ran real, full end-to-end pipeline tests (not just the isolated
+strategy) to check both fixes actually work together: a 12-qubit run
+completed in about 83 seconds; a 13-qubit run in about 8 minutes
+(previously, neither finished within 15 minutes at all). The remaining
+cost at this stage comes from a handful of the pipeline's own one-off
+accuracy checks (used for reporting, not search) that neither fix
+touched -- these get slower with qubit count on their own, which is
+why 13 qubits still costs noticeably more than 12.
+
+While running that real test, found a third problem: the DEFAULT
+re-injection strategy (a third, simpler one, distinct from the two
+above) was never actually fixed by the above -- a real run using it
+got stuck for over 6 minutes and had to be stopped by hand. Diagnosed
+and fixed the same day (Update 3 below).
+
+Update 3: fixed the third (default) re-injection strategy. Its
+problem turned out to have an unusually clean fix -- the accuracy
+check it needs can be reduced to a simple formula depending only on
+which type of change is being tried, not on the circuit at all, so
+almost all of the computation it was doing was unnecessary regardless
+of circuit size. Verified this formula gives identical accept/reject
+decisions to the old (correct but slow) method across 500 test cases
+on a real circuit before relying on it. Result: turns a run that
+previously got stuck for 6+ minutes into one that completes in about 2
+minutes -- and unlike the other two fixes, this one has no qubit-count
+ceiling at all (confirmed instant at 12, 13, 16, and 20 qubits alike).
+
+All three known re-injection-strategy slowdowns are now fixed. What's
+left before larger circuits are practical again is a separate, deeper
+problem: past roughly 13-14 qubits, a handful of the pipeline's own
+one-off accuracy checks become too slow by other means already known
+about (see IMPLEMENTATION NOTES) -- these three fixes remove the
+"doing the same check too many times" problem but not that one.
 
 Research contribution chosen and implemented: a second per-block
 algorithm, SMS-EMOA (optimizes for a diverse set of good trade-off

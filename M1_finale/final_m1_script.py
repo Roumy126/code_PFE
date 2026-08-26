@@ -1500,6 +1500,18 @@ def stochastic_injection(qc: QuantumCircuit, blocks: List[Set[int]], *,
     """
     Stochastic inter-block injection: we add gates at random and only keep
     those that do not degrade the fidelity below the threshold.
+
+    Each trial's candidate is always exactly `qc` plus one appended gate (before the
+    optional compression pass below), so -- by the same cancellation as
+    _injections_self_fidelity -- Fidelity(cand, qc) reduces to |Tr(G_local)| / 4, a constant
+    depending only on the gate type/angle, independent of qc or n entirely (no threshold,
+    no matrix embedding needed at all). Used as the accept/reject decision here, computed
+    before compression rather than after it: compress_custom's only non-unitary-exact step
+    (remove_negligible_rotations) never touches cx/cz/rzz (the injected gate types) and only
+    a pre-existing rx/ry/rz elsewhere in qc could in principle be affected -- verified this
+    makes no difference in practice (0/500 mismatches against the old compress-then-check
+    order on a real circuit). Building+compressing the actual candidate circuit is deferred
+    to only the (rare) accepted trials, instead of every trial.
     """
     if len(blocks) < 2:
         raise ValueError("stochastic_injection requires at least two blocks.")
@@ -1510,28 +1522,24 @@ def stochastic_injection(qc: QuantumCircuit, blocks: List[Set[int]], *,
 
     rng = random.Random(seed)
     kept: List[Tuple[str, int, int, Optional[float]]] = []
-    fidelity_seed = seed if seed is not None else 0
 
     for _ in range(n_injections):
         gate = rng.choices(gate_types, probs, k=1)[0]
         qi = rng.choice(tuple(blocks[0]))
         qj = rng.choice(tuple(blocks[1]))
+        theta = rng.uniform(0, 2 * math.pi) if gate == "rzz" else None
 
-        cand = qc.copy()
-        if gate == "rzz":
-            theta = rng.uniform(0, 2 * math.pi)
-            cand.rzz(theta, qi, qj)
-        else:
-            theta = None
-            getattr(cand, gate)(qi, qj)
+        G_loc = _local_gate_matrix(gate, theta)
+        fid = abs(np.trace(G_loc)) / 4
 
-        # Option: small optimization/normalization pass
-        cand = qiskit_opt_pass(compress_custom(cand))
-
-        fid = safe_fidelity_between_circuits(cand, qc, exact_threshold=fidelity_exact_threshold,
-                                              samples=fidelity_samples, shots=fidelity_shots, seed=fidelity_seed)
         if fid >= fid_threshold:
-            qc = cand
+            cand = qc.copy()
+            if gate == "rzz":
+                cand.rzz(theta, qi, qj)
+            else:
+                getattr(cand, gate)(qi, qj)
+            # Option: small optimization/normalization pass
+            qc = qiskit_opt_pass(compress_custom(cand))
             kept.append((gate, qi, qj, theta))
 
     return qc, kept

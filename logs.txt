@@ -859,6 +859,91 @@ redundant re-simulation. Retrying the 12+ qubit sweep is now more
 plausible than before, though not yet attempted -- the statevector/MPS
 wall above n~13-14 remains the next thing to solve if that's revisited.
 
+Real-run validation (2026-08-26), via run_experiment.py rather than
+isolated function calls: qaoa_maxcut at n=12/n=13, tiny GA settings
+(generations=3, pop_size=8) to isolate injection-stage cost from
+block-optimization cost.
+- n=12, injection_method=sa: 83s total (partition 0.4s, block-opt 9.0s,
+  injection 73.3s, compression 0.4s).
+- n=13, injection_method=sa (--injection-fidelity-exact-threshold 13
+  override needed -- default 12 would otherwise route n=13 through the
+  untouched approximate SWAP-test path instead of the fixed exact
+  path): 500s total (injection 272.0s, rest same order as n=12).
+Both previously did not complete within a 15-minute bound at these
+settings. The injection stage still dominates and grows with n because
+the pipeline's own standalone reporting-level fidelity calls
+(fid_rebuilt, fid_rebuilt1, fid_inj, fid_i, fid_final -- five single
+dense-Operator calls per run, untouched by either fix) still pay the
+full O(4^n)-ish cost per call.
+
+While validating this, discovered stochastic_injection (the pipeline's
+DEFAULT injection_method) was NOT actually fixed by the work above --
+it was deliberately left alone earlier over concern that its
+compress_custom step isn't exactly unitary-preserving. A real n=12 run
+with the default method got stuck for 6+ minutes inside it (its
+default n_injections=100 trials each pay the full ~25s/call exact-
+fidelity cost = ~42 minutes) before being killed -- confirms it was a
+live, not just theoretical, blocker.
+
+=====================================================================
+STOCHASTIC_INJECTION FAST PATH FOUND AND FIXED (2026-08-26)
+=====================================================================
+Root cause is a simpler variant of the sa_injection algebra:
+stochastic_injection's candidate is always qc plus exactly one
+appended gate (before its compress_custom/qiskit_opt_pass step), so
+Fidelity(cand, qc) = |Tr(G_embedded)| / 2^n reduces all the way to
+|Tr(G_local)| / 4 -- a constant depending ONLY on the gate type/angle
+(cx/cz -> 0.5 always; rzz(theta) -> |cos(theta/2)|), with NO dependence
+on qc, blocks, or n whatsoever. Unlike the sa_injection/
+fidelity_driven_injection fixes, this needed no partial trace or
+cached-operator machinery at all -- just the existing _local_gate_matrix
+helper and a trace.
+
+Checked whether compress_custom (applied to the OLD code's candidate
+before the fidelity check) could change this: cancel_inverse_gates only
+handles {x, y, z, h, cx} (not cz/rzz) and requires an exact adjacent
+duplicate; merge_rotations and remove_negligible_rotations only touch
+single-qubit rx/ry/rz (never cx/cz/rzz, the only gate types this
+function ever injects). So compression can only matter through a
+secondary effect on some OTHER pre-existing rotation elsewhere in qc.
+Verified empirically rather than trusting this reasoning alone: 500
+trials on a real qaoa_maxcut(n=9) circuit, comparing the old
+compress-then-check order against the new closed-form-only-check --
+0/500 mismatches, identical accept counts (7/500 both).
+
+Implemented in M1_finale/final_m1_script.py: stochastic_injection now
+computes fid via the closed form BEFORE building or compressing any
+candidate circuit; only accepted trials (rare) pay the cost of
+building+compressing the actual kept circuit. fidelity_exact_threshold/
+fidelity_samples/fidelity_shots stay in the function's signature
+(unused internally now) since the pipeline call site passes them via a
+dict shared with sa_injection, which still needs them for its own
+fallback branch -- not worth special-casing the shared call site for.
+
+Verified:
+- n=9, n_injections=50: kept list byte-identical to pre-fix
+  (both empty in this test); 9.22s -> 0.01s (~920x).
+- n=12/13/16/20, n_injections=100 (real default): all ~0.01-0.02s --
+  confirms this fix has NO qubit-count ceiling at all (unlike the other
+  two fixes, whose remaining cost still depends on n through the
+  reporting-level calls) since the closed form never touches an n-sized
+  matrix.
+- Full pytest smoke suite (11 tests): all pass, no behavior change.
+- Real pipeline run, n=12, DEFAULT injection_method=stochastic (the
+  exact configuration that hung 6+ minutes above): 121.3s total
+  (partition 0.4s, block-opt 9.1s, injection 55.6s, compression 0.5s)
+  -- injection stage now cheaper than the sa-method run's 73.3s, since
+  stochastic_injection's own cost is now negligible, leaving only the
+  reporting calls and fidelity_driven_injection.
+
+All three injection-stage redundant-simulation bottlenecks identified
+during this scaling investigation are now fixed. What remains before
+pushing past n~13-14 is the separate, deeper problem: the pipeline's
+five standalone reporting-level fidelity calls and the exact-vs-
+approximate backend wall for genuinely entangled circuits (see the
+sa_injection fix's context above) -- neither touched by any of these
+three fixes.
+
 =====================================================================
 RESEARCH ANGLE CHOSEN AND IMPLEMENTED: SMS-EMOA + operator/hybrid
 ablations (2026-08-25)
