@@ -98,24 +98,23 @@ N_SEEDS = 5  # roadmap ultimately wants 10-20 seeds per config for review
 GENERATIONS = 100
 POP_SIZE = 100
 
-# Above this many qubits, sa_injection's default sa_iters=3000 costs real wall-clock per
-# iteration via the approximate fidelity backend (measured: ~21.6 min at n=12 vs. ~9.1 min
-# for stochastic, which is also the actual floor -- the always-on greedy fidelity_driven_injection
-# pass costs the same either way, and reducing sa_iters to 150 made sa's total time converge to
-# stochastic's anyway). Combined with the 8-qubit finding that the greedy pass wins 48/50 runs
-# regardless of injection method, sa isn't worth its extra cost above this size -- dropped
-# from the grid there rather than tuned down further.
-LARGE_N_THRESHOLD = 10
+# NOTE: sa was previously dropped from the grid above 10 qubits (sa_injection's default
+# sa_iters=3000 cost real wall-clock per iteration via the approximate fidelity backend,
+# ~21.6 min at n=12 vs. ~9.1 min for stochastic). That measurement predates the 2026-08-26
+# sa_injection fix (see logs.txt "SCALING - SA INJECTION FAST PATH FOUND AND FIXED"):
+# sa_injection's energy check always compares a candidate to its own unchanged base, so it
+# reduces to an exact closed-form computation unconditionally, at any n -- no longer costs
+# more than stochastic at any qubit count. The per-size exclusion was removed accordingly.
 
 
 def build_grid(circuits, n_qubits_override, injection_methods, n_seeds,
                 block_algorithms=BLOCK_ALGORITHMS, mutation_schemes=MUTATION_SCHEMES,
-                hybrid_las_options=HYBRID_LAS_OPTIONS):
+                hybrid_las_options=HYBRID_LAS_OPTIONS,
+                fidelity_exact_threshold=None, injection_fidelity_exact_threshold=None):
     for circuit in circuits:
         sizes = n_qubits_override if n_qubits_override is not None else CIRCUIT_QUBIT_SIZES[circuit]
         for n_qubits in sizes:
-            methods = [m for m in injection_methods if n_qubits <= LARGE_N_THRESHOLD or m != "sa"]
-            for injection_method in methods:
+            for injection_method in injection_methods:
                 for block_algorithm in block_algorithms:
                     for mutation_scheme in mutation_schemes:
                         for hybrid_las in hybrid_las_options:
@@ -130,17 +129,30 @@ def build_grid(circuits, n_qubits_override, injection_methods, n_seeds,
                                     "generations": GENERATIONS,
                                     "pop_size": POP_SIZE,
                                     "seed": seed,
+                                    "fidelity_exact_threshold": fidelity_exact_threshold,
+                                    "injection_fidelity_exact_threshold": injection_fidelity_exact_threshold,
                                 }
 
 
 def run_id_for(cfg: dict) -> str:
     # Encodes every varied parameter so a change to generations/pop_size (or
     # any other swept knob) can't silently collide with a stale prior run.
-    return (
+    run_id = (
         f"{cfg['circuit']}_{cfg['n_qubits']}q_{cfg['injection_method']}"
         f"_{cfg['block_algorithm']}_{cfg['mutation_scheme']}_las{int(cfg['hybrid_las'])}"
         f"_g{cfg['generations']}_p{cfg['pop_size']}_seed{cfg['seed']}"
     )
+    # Only appended when explicitly overridden, so existing run_ids (and the runs/ dataset
+    # already built on them) are unaffected by this option's addition -- the CLI default
+    # (None) means "let run_experiment.py use its own default", same as before this flag
+    # existed.
+    fet = cfg.get("fidelity_exact_threshold")
+    ifet = cfg.get("injection_fidelity_exact_threshold")
+    if fet is not None:
+        run_id += f"_fet{fet}"
+    if ifet is not None:
+        run_id += f"_ifet{ifet}"
+    return run_id
 
 
 def parse_args(argv=None):
@@ -159,6 +171,17 @@ def parse_args(argv=None):
                     default=[int(v) for v in HYBRID_LAS_OPTIONS],
                     help="0=pure GA, 1=hybrid GA+LAS. Pass both to sweep the axis.")
     p.add_argument("--n-seeds", type=int, default=N_SEEDS)
+    p.add_argument("--fidelity-exact-threshold", type=int, default=None,
+                    help="Passed through to run_experiment.py's flag of the same name "
+                         "(reporting-level fidelity calls). Default: let run_experiment.py "
+                         "use its own default (13). Needed to sweep circuits above that size "
+                         "without falling back to the untouched approximate SWAP-test path.")
+    p.add_argument("--injection-fidelity-exact-threshold", type=int, default=None,
+                    help="Passed through to run_experiment.py's flag of the same name "
+                         "(fidelity_driven_injection's per-trial loop, which always runs "
+                         "regardless of --injection-methods). Default: let run_experiment.py "
+                         "use its own default (12). E.g. pass 13 to sweep 13-qubit circuits "
+                         "on the fixed, exact fast path instead of the approximate one.")
     p.add_argument("--runs-dir", default="runs")
     p.add_argument("--dry-run", action="store_true", help="Print the grid and exit.")
     return p.parse_args(argv)
@@ -173,6 +196,8 @@ def main(argv=None):
         block_algorithms=args.block_algorithms,
         mutation_schemes=args.mutation_schemes,
         hybrid_las_options=[bool(v) for v in args.hybrid_las_options],
+        fidelity_exact_threshold=args.fidelity_exact_threshold,
+        injection_fidelity_exact_threshold=args.injection_fidelity_exact_threshold,
     ))
 
     print(f"Sweep grid: {len(grid)} configurations")
@@ -204,6 +229,10 @@ def main(argv=None):
         ]
         if cfg["hybrid_las"]:
             cmd.append("--hybrid-las")
+        if cfg.get("fidelity_exact_threshold") is not None:
+            cmd += ["--fidelity-exact-threshold", str(cfg["fidelity_exact_threshold"])]
+        if cfg.get("injection_fidelity_exact_threshold") is not None:
+            cmd += ["--injection-fidelity-exact-threshold", str(cfg["injection_fidelity_exact_threshold"])]
         print(f"[run]  {run_id}")
         # start_new_session=True makes this subprocess (and every worker it
         # spawns, e.g. joblib/loky) its own process group, so it can be torn

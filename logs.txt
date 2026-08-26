@@ -945,6 +945,71 @@ sa_injection fix's context above) -- neither touched by any of these
 three fixes.
 
 =====================================================================
+PILOT SWEEP AT n=12/13 AND run_sweep.py UPDATES (2026-08-26)
+=====================================================================
+With all three injection fixes in place, ran real pilot sweeps via
+run_sweep.py (not isolated function calls) to check whether the
+benchmark suite is actually practical past 8 qubits now.
+
+n=12, all 5 circuit families, 1 seed each, real production GA settings
+(generations=100, pop_size=100), injection_method=stochastic: 4/5 ran
+(qaoa_maxcut already had a result from the direct validation above),
+0 failures.
+  w_state               77.5s   fidelity_final=0.042
+  hw_efficient_ansatz   94.1s   fidelity_final=0.036
+  qaoa_maxcut          125.1s   fidelity_final=0.00009
+  weak_random          168.2s   fidelity_final=0.349
+  qft                  238.9s   fidelity_final=0.008
+Average ~141s/run. First real confirmation that block_optimization's
+cost at PRODUCTION settings (100 gens x 100 pop, not the tiny
+generations=3/pop_size=8 used for the earlier isolated-fix validation)
+stays cheap at n=12 -- all 3 blocks' full 100-generation runs finished
+in ~60-70s total, confirming block-level fitness evaluation cost
+really is a function of per-block (not total-circuit) qubit count, as
+suspected but not previously measured at real settings. Results folded
+into runs/results_master.csv (265 rows). Noted in passing: some older
+weak_random_12q rows already present in runs/ from the paused
+2026-08-19/24 large-qubit scaling attempt (pre-dating all three fixes,
+wall_clock_s up to 2342s) -- left alone as historical, unrelated to
+this pilot.
+
+n=13 needed a run_sweep.py change first: it has no CLI flag to
+override --injection-fidelity-exact-threshold (default 12), so a
+13-qubit run would silently route fidelity_driven_injection (which
+always runs regardless of --injection-methods) through the untouched,
+slow/approximate SWAP-test path instead of the fixed exact one.
+Added --fidelity-exact-threshold and --injection-fidelity-exact-
+threshold CLI flags to run_sweep.py, passed through to
+run_experiment.py's existing flags of the same name. Both default to
+None (meaning: don't override, let run_experiment.py use its own
+default) and are only appended to run_id_for's output when explicitly
+set, so every existing run_id in the current 265-row dataset is
+unaffected -- verified via dry-run diff before and after the change.
+
+Also removed run_sweep.py's LARGE_N_THRESHOLD=10 logic, which
+previously dropped "sa" from the grid above 10 qubits. That exclusion
+was based on a pre-fix measurement (sa_injection ~21.6 min vs
+stochastic's ~9.1 min at n=12); the 2026-08-26 sa_injection fix makes
+its energy check an unconditional exact closed-form computation at any
+n (not gated by any threshold), so the premise no longer holds --
+verified sa_injection is not slower than stochastic post-fix (see the
+sa_injection fix entry above). Removing this makes --injection-methods
+sa usable above n=10 again, needed for the flag test below.
+
+Verified end-to-end with the new flag: `python run_sweep.py --circuits
+qaoa_maxcut --n-qubits 13 --injection-methods sa --n-seeds 1
+--injection-fidelity-exact-threshold 13` -> run_id
+qaoa_maxcut_13q_sa_..._ifet13, completed in 495.6s (matches the
+495-500s range from the earlier direct n=13 validation almost exactly,
+confirming the flag actually reaches the pipeline's fidelity backend
+selection correctly). Full pytest smoke suite (11 tests) still passes.
+
+Not yet done: the full n=12 grid (5 circuits x 5 seeds = 25 runs,
+extrapolated ~1 hour from the pilot's ~141s/run average) and any
+broader n=13 sweep -- pilot was intentionally kept small to validate
+viability before committing to the larger time cost.
+
+=====================================================================
 RESEARCH ANGLE CHOSEN AND IMPLEMENTED: SMS-EMOA + operator/hybrid
 ablations (2026-08-25)
 =====================================================================

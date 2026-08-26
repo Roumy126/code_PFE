@@ -131,19 +131,20 @@ NEXT STEPS
 =====================================================================
 - Move into results write-up, targeting ~December 2026 submission.
 - Revisit scaling past 8 qubits as a follow-on effort (not on the
-  critical path for the first submission) -- both known cost
-  bottlenecks in the re-injection stage are now fixed; a 12- and
-  13-qubit run can complete end-to-end for the first time. The
-  remaining blocker before pushing further is the deeper accuracy-
-  computation problem noted in IMPLEMENTATION NOTES, past ~13-14
-  qubits.
+  critical path for the first submission) -- all three known cost
+  bottlenecks in the re-injection stage are now fixed; 12- and
+  13-qubit runs complete end-to-end. A small real pilot (5 circuit
+  types, real full-length settings, 12 qubits) confirmed this
+  in practice: every run succeeded, averaging ~2.3 minutes each. A
+  full 25-run sweep at 12 qubits (5 circuit types x 5 repeats) is
+  estimated at roughly an hour and has not been run yet -- next step
+  if scaling work continues. The remaining blocker before pushing
+  past ~13-14 qubits is the deeper accuracy-computation problem noted
+  in IMPLEMENTATION NOTES.
 - Since the fixed strategies are now far cheaper (especially
   simulated annealing), it may be worth re-comparing them against
   each other at 8 qubits too -- the earlier finding that simulated
   annealing "wasn't worth its cost" was measured before this fix.
-- Worth trying a real 12/13-qubit sweep now that both fixes are in,
-  to see how far the benchmark suite can actually be pushed before
-  hitting the remaining accuracy-computation wall.
 
 =====================================================================
 IMPLEMENTATION NOTES
