@@ -71,10 +71,18 @@ signal.signal(signal.SIGINT, _handle_terminate)
 
 CIRCUITS = ["weak_random", "qaoa_maxcut", "w_state", "qft", "hw_efficient_ansatz"]
 
-# Per-circuit qubit sizes. Capped at 8 -- larger tiers (12/16/20q) repeatedly hit
-# fidelity/injection-stage performance walls (hangs, multi-hour runs) on genuinely
-# entangled circuit families. Scaling past 8 qubits is deferred; see logs.txt's
-# "SCALING — DEFERRED" section. Pass --n-qubits to override for a one-off run.
+# Per-circuit qubit sizes. Still capped at 8 here as a conservative baseline default,
+# NOT a hard technical limit any more -- kept unchanged so a plain `python run_sweep.py`
+# stays behavior-unchanged (this project's convention: sweep defaults only change when
+# explicitly decided, not silently). Since the original "SCALING — DEFERRED" 8-qubit
+# decision, real pilot sweeps (via --n-qubits overrides, not by editing this dict) have
+# established n=12/13 as practical for all 5 families (2026-08-26 injection-stage fixes),
+# and n=16-32 as practical for 4 of the 5 (weak_random/w_state/hw_efficient_ansatz/qft) --
+# qaoa_maxcut remains genuinely expensive past ~n=16 even after the 2026-08-27 fidelity-
+# backend fix (see logs.txt's "SCALING — ECHO-TEST FIDELITY BACKEND REPLACES SWAP TEST"),
+# and needs --fidelity-driven-max-trials / --fidelity-echo-samples / --fidelity-echo-shots
+# lowered to stay tractable at those sizes. See logs.txt's "SCALING" entries for the full
+# history. Pass --n-qubits to override for a one-off run.
 CIRCUIT_QUBIT_SIZES = {
     "weak_random": [8],
     "qaoa_maxcut": [8],

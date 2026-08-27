@@ -89,7 +89,7 @@ def test_pipeline_runs_end_to_end_via_approximate_fidelity(tmp_path, monkeypatch
 
     assert qc_opt.num_qubits == qc.num_qubits
     assert 0.0 <= meta["fidelity_final"] <= 1.0 + 1e-6
-    assert meta["fidelity_backend"] == "swap_test_mc"
+    assert meta["fidelity_backend"] == "echo_test_mc"
 
 
 @pytest.mark.parametrize("kwargs", [

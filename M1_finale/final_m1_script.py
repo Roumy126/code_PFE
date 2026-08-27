@@ -513,61 +513,62 @@ def _rand_product_prep(n: int, rng: random.Random) -> QuantumCircuit:
     return prep
 
 
-def _swap_test_circuit(n: int, U: QuantumCircuit, V: QuantumCircuit, prep: QuantumCircuit) -> QuantumCircuit:
+def _echo_test_circuit(n: int, U: QuantumCircuit, V: QuantumCircuit, prep: QuantumCircuit) -> QuantumCircuit:
     """
-    Builds the SWAP-test circuit between U|psi> and V|psi> (same |psi> prepared on both
-    sides). Exactly one classical bit for the ancilla measurement -- QuantumCircuit(total, 1)
-    followed by adding a second ClassicalRegister (as in the original nex_formula notebook
-    this was ported from) creates an unused implicit register, so get_counts() keys become
-    two-register strings like '0 0' and a bare counts.get('0', ...) lookup silently never
-    matches, always returning a 0.0 estimate. Fixed here by declaring only one register.
+    Builds the fidelity-echo circuit for |<psi|U^dagger V|psi>|^2, |psi> = prep|0>:
+    prep, V, U^dagger, prep^dagger, then measure all n qubits. The probability of the
+    all-zero outcome equals |<psi|U^dagger V|psi>|^2 exactly:
+        <0| prep^dagger U^dagger V prep |0> = (prep|0>)^dagger . U^dagger V . (prep|0>)
+                                              = <psi| U^dagger V |psi>
+    This replaces an earlier SWAP-test formulation (ancilla + 2n data qubits + n CSWAP
+    gates entangling two separate copies of the state, then a Hadamard-test-style
+    2*p0-1 readout) with a direct n-qubit measurement -- same target quantity (verified
+    against both the exact dense-operator value and the old SWAP-test estimator on
+    matching random samples: both unbiased, echo has visibly lower variance since it
+    skips the Hadamard-test transform that doubles the SWAP test's shot noise), at
+    roughly half the qubit count and with no extra CSWAP-induced entanglement between
+    two coupled registers. On a real 10-qubit QAOA circuit (the case that originally
+    motivated the exact/SWAP-test threshold split -- see logs.txt "SCALING -- SA
+    INJECTION FAST PATH FOUND AND FIXED"), the old SWAP test did not complete within a
+    90s bound under matrix_product_state at production settings (p=2, shots=128); this
+    replacement completes the same comparison in ~0.06s.
     """
-    anc = 1
-    total = anc + 2 * n
-    qc = QuantumCircuit(total, 1)
-
-    a = 0
-    A = [1 + i for i in range(n)]
-    B = [1 + n + i for i in range(n)]
-
-    qc.compose(prep, qubits=A, inplace=True)
-    qc.compose(prep, qubits=B, inplace=True)
-    qc.compose(U, qubits=A, inplace=True)
-    qc.compose(V, qubits=B, inplace=True)
-
-    qc.h(a)
-    for i in range(n):
-        qc.cswap(a, A[i], B[i])
-    qc.h(a)
-    qc.measure(a, 0)
+    qc = QuantumCircuit(n, n)
+    qc.compose(prep, qubits=range(n), inplace=True)
+    qc.compose(V, qubits=range(n), inplace=True)
+    qc.compose(U.inverse(), qubits=range(n), inplace=True)
+    qc.compose(prep.inverse(), qubits=range(n), inplace=True)
+    qc.measure(range(n), range(n))
     return qc
 
 
-def _estimate_overlap_sq_swap_once(U: QuantumCircuit, V: QuantumCircuit, *, shots: int, seed: int) -> float:
-    """Estimates |<psi|U^dagger V|psi>|^2 for a random product state via one SWAP test."""
+def _estimate_overlap_sq_echo_once(U: QuantumCircuit, V: QuantumCircuit, *, shots: int, seed: int) -> float:
+    """Estimates |<psi|U^dagger V|psi>|^2 for a random product state via one fidelity-echo circuit."""
     assert U.num_qubits == V.num_qubits, "U and V must have the same number of qubits."
     n = U.num_qubits
     rng = random.Random(seed)
     prep = _rand_product_prep(n, rng)
-    qc = _swap_test_circuit(n, U, V, prep)
-    # Default/statevector methods are exponential in the SWAP-test circuit's OWN qubit
-    # count (2n+1, not n) -- infeasible past ~n=15 and outright rejected past 31 total
-    # qubits. matrix_product_state stays cheap for this project's weakly-connected target
-    # circuits regardless of n (validated up to n=20: ~0.06-0.08s at 512 shots).
+    qc = _echo_test_circuit(n, U, V, prep)
+    # matrix_product_state stays cheap for this project's weakly-connected target circuits
+    # regardless of n, and -- unlike the old SWAP-test circuit's 2n+1 qubits plus n
+    # entanglement-inducing CSWAP gates coupling two separate registers -- also stays cheap
+    # for genuinely entangled families (QAOA/QFT/W-state/hw-efficient-ansatz) at the sizes
+    # that used to stall (see docstring above and logs.txt "SCALING -- ECHO-TEST FIDELITY
+    # BACKEND REPLACES SWAP TEST").
     sim = AerSimulator(method="matrix_product_state")
     tqc = transpile(qc, sim, optimization_level=1)
     res = sim.run(tqc, shots=shots, seed_simulator=seed).result()
     counts = res.get_counts()
-    p0 = counts.get('0', 0) / shots
-    return max(0.0, min(1.0, 2.0 * p0 - 1.0))
+    p0 = counts.get('0' * n, 0) / shots
+    return max(0.0, min(1.0, p0))
 
 
-def approximate_gate_fidelity_swap_mc(U: QuantumCircuit, V: QuantumCircuit, *,
+def approximate_gate_fidelity_echo_mc(U: QuantumCircuit, V: QuantumCircuit, *,
                                        samples: int, shots: int, seed: int) -> float:
-    """Monte-Carlo average of |<psi|U^dagger V|psi>|^2 via SWAP test on random product states."""
+    """Monte-Carlo average of |<psi|U^dagger V|psi>|^2 via a fidelity-echo circuit on random product states."""
     rng = random.Random(seed)
     vals = [
-        _estimate_overlap_sq_swap_once(U, V, shots=shots, seed=rng.randint(0, 10**9))
+        _estimate_overlap_sq_echo_once(U, V, shots=shots, seed=rng.randint(0, 10**9))
         for _ in range(samples)
     ]
     return sum(vals) / len(vals) if vals else 0.0
@@ -581,26 +582,35 @@ def safe_fidelity_between_circuits(
     samples: int = 8,
     shots: int = 128,
     seed: int = 0,
+    target_operator: Optional[np.ndarray] = None,
 ) -> float:
     """
     Circuit-vs-circuit fidelity that stays laptop-tractable past compute_fidelity's dense-
     Operator scaling wall: exact trace fidelity (|Tr(Ua Ub^dagger)| / 2^n) when
-    n <= exact_threshold, else a Monte-Carlo SWAP-test estimate (approximate_gate_fidelity_swap_mc).
+    n <= exact_threshold, else a Monte-Carlo fidelity-echo estimate
+    (approximate_gate_fidelity_echo_mc -- see _echo_test_circuit for the method; replaced an
+    earlier SWAP-test formulation on 2026-08-27, same target quantity, much cheaper).
 
     This is a proxy metric above exact_threshold, not a full-Hilbert-space fidelity: it
     estimates overlap on random PRODUCT states only, so it can diverge more from the exact
     value for highly entangled circuit differences (validated: within ~0.005 of exact for a
     near-identical pair, noisier for very different circuits). Defaults (threshold=10,
-    samples=8, shots=128) trade estimate precision for speed (~0.0046s/shot measured) --
-    tune upward if a specific comparison needs tighter estimates.
+    samples=8, shots=128) trade estimate precision for speed -- tune upward if a specific
+    comparison needs tighter estimates.
+
+    target_operator: optional precomputed Operator(qc_b).data, for callers that compare many
+    different qc_a against the SAME qc_b repeatedly (e.g. the pipeline's reporting-level
+    fidelity checks against the fixed original target circuit) -- skips rebuilding qc_b's
+    dense operator on every call. Ignored (qc_b is used instead) once n > exact_threshold,
+    since that branch never touches an operator at all.
     """
     assert qc_a.num_qubits == qc_b.num_qubits, "Circuits of different sizes."
     n = qc_a.num_qubits
     if exact_threshold >= 0 and n <= exact_threshold:
         Ua = Operator(qc_a).data
-        Ub = Operator(qc_b).data
+        Ub = target_operator if target_operator is not None else Operator(qc_b).data
         return abs(np.trace(Ua @ Ub.conj().T)) / (2 ** n)
-    return approximate_gate_fidelity_swap_mc(qc_a, qc_b, samples=samples, shots=shots, seed=seed)
+    return approximate_gate_fidelity_echo_mc(qc_a, qc_b, samples=samples, shots=shots, seed=seed)
 
 
 def cancel_inverse_gates(c: QuantumCircuit) -> QuantumCircuit:
@@ -1438,9 +1448,10 @@ def sa_injection(base_qc: QuantumCircuit, blocks: List[Set[int]], *,
     Returns the final circuit and the list of retained injections.
 
     NOTE: each of the n_iters energy evaluations calls safe_fidelity_between_circuits, which
-    is cheap under fidelity_exact_threshold but costs real wall-clock (seconds, not
-    milliseconds) above it via the Monte-Carlo SWAP-test -- n_iters is NOT auto-scaled down
-    for large circuits, lower it manually for big-n runs.
+    is cheap under fidelity_exact_threshold and, above it, now uses the fidelity-echo Monte-
+    Carlo estimator (see _echo_test_circuit) -- much cheaper than the SWAP-test formulation
+    this replaced on 2026-08-27, but n_iters is still NOT auto-scaled down for large circuits,
+    lower it manually for big-n runs if needed.
     """
     if len(blocks) < 2:
         raise ValueError("sa_injection requires at least two blocks.")
@@ -1642,6 +1653,7 @@ def fidelity_driven_injection(
     fid_threshold: float = 0.9999,
     fidelity_exact_threshold: int = 10, fidelity_samples: int = 8,
     fidelity_shots: int = 128, fidelity_seed: int = 0,
+    target_operator: Optional[np.ndarray] = None,
 ) -> Tuple[QuantumCircuit, List[Tuple[str, int, int, Optional[float]]]]:
     """
     Iteratively adds inter-block gates that improve the fidelity with respect to `target_qc`.
@@ -1656,7 +1668,11 @@ def fidelity_driven_injection(
     Exact, not an approximation: verified bit-identical to the previous per-trial simulation
     across cx/cz/rzz trials at n=9-11 before this was adopted. Falls back to the original
     per-trial simulated path above that threshold, where safe_fidelity_between_circuits
-    switches to the SWAP-test/MPS estimator anyway.
+    switches to the fidelity-echo/MPS estimator anyway.
+
+    target_operator: optional precomputed Operator(target_qc).data (see
+    safe_fidelity_between_circuits) -- skips rebuilding target_qc's operator here too, when
+    the caller already built it for the same target_qc elsewhere in the same run.
     """
     candidate_qc = base_qc.copy()
     kept_injections: List[Tuple[str, int, int, Optional[float]]] = []
@@ -1669,7 +1685,8 @@ def fidelity_driven_injection(
     use_fast_path = n <= fidelity_exact_threshold
 
     if use_fast_path:
-        U_target_dag = Operator(target_qc).data.conj().T
+        U_target = target_operator if target_operator is not None else Operator(target_qc).data
+        U_target_dag = U_target.conj().T
         M = Operator(candidate_qc).data @ U_target_dag
         fid_old = abs(np.trace(M)) / (2 ** n)
     else:
@@ -1767,6 +1784,7 @@ def optimise_circuit_pipeline(
     injection_fidelity_samples: int = 2,
     injection_fidelity_shots: int = 16,
     injection_fidelity_exact_threshold: int = 12,
+    fidelity_driven_max_trials: int = 300,
 ) -> Tuple[QuantumCircuit, Dict[str, object]]:
     print("\nOriginal circuit:")
     print(qc.draw(output="text"))
@@ -1778,19 +1796,35 @@ def optimise_circuit_pipeline(
     qc_orig = qc.copy()
     fid_kwargs = dict(exact_threshold=fidelity_exact_threshold, samples=fidelity_samples,
                       shots=fidelity_shots, seed=sa_seed if sa_seed is not None else 0)
+    # qc_orig never changes after this point, but it's compared against below in 5 separate
+    # safe_fidelity_between_circuits calls (fid_rebuilt/fid_rebuilt1/fid_inj/fid_i/fid_final)
+    # plus once more inside fidelity_driven_injection -- each independently rebuilding
+    # Operator(qc_orig) from scratch (see logs.txt "SCALING -- FIDELITY-DRIVEN INJECTION FAST
+    # PATH FOUND AND FIXED" for why this exact-Operator tier is the dominant remaining cost at
+    # n=12-13). Build it once here and hand it to every call site instead.
+    target_operator_cache = Operator(qc_orig).data if qc_orig.num_qubits <= fidelity_exact_threshold else None
     # The injection stage's per-trial fidelity checks (hundreds of them: n_iters/n_injections/
-    # max_trials) compare circuits that differ by a newly-added CROSS-BLOCK entangling gate --
-    # the SWAP-test's cswap ladder has to represent that real entanglement, which is far more
-    # expensive for the matrix_product_state simulator than the near-identical/low-entanglement
-    # pairs fidelity_samples/fidelity_shots were tuned against (a single such call measured
-    # >900s at the pipeline's general defaults, vs. ~11s for a same-circuit comparison). Below
+    # max_trials) compare circuits that differ by a newly-added CROSS-BLOCK entangling gate.
+    # The numbers below (>900s/242.8s/898s per call) were measured against the OLD SWAP-test
+    # approximate backend -- its cswap ladder had to represent real cross-block entanglement,
+    # far more expensive for matrix_product_state than the near-identical/low-entanglement
+    # pairs fidelity_samples/fidelity_shots were originally tuned against. That backend was
+    # replaced by a fidelity-echo estimator on 2026-08-27 (see _echo_test_circuit), which is
+    # dramatically cheaper on exactly this kind of genuinely-entangled comparison (~0.06s vs.
+    # a >90s timeout on a matching real 10-qubit QAOA case -- see logs.txt "SCALING --
+    # ECHO-TEST FIDELITY BACKEND REPLACES SWAP TEST"), so injection_fidelity_exact_threshold's
+    # low value below (deliberately kept lower than fidelity_exact_threshold specifically to
+    # route these hundreds-of-calls loops around the old slow approximate backend) is now a
+    # stale, over-conservative threshold that has NOT yet been re-benchmarked against the new
+    # backend -- a natural next scaling step, not done here. Below
     # injection_fidelity_exact_threshold, use exact dense-Operator fidelity instead -- for
-    # genuinely entangled targets (e.g. QAOA) exact is both correct AND faster than the SWAP-test
-    # proxy at these sizes (measured: 25s/call exact vs. 242.8s approximate at n=12 on a real
-    # qaoa_maxcut candidate/target pair -- see "SCALING — DEFERRED" in logs.txt). Kept as
+    # genuinely entangled targets (e.g. QAOA) exact is both correct AND was faster than the OLD
+    # SWAP-test proxy at these sizes (measured: 25s/call exact vs. 242.8s approximate at n=12 on
+    # a real qaoa_maxcut candidate/target pair -- see "SCALING — DEFERRED" in logs.txt). Kept as
     # its own (separate, lower) threshold from fidelity_exact_threshold because this loop runs
-    # hundreds of calls, not a handful -- exact cost is fine at n=12 (25s) but not at n=14+
-    # (898s/call measured), so this must not follow the general threshold up that far.
+    # hundreds of calls, not a handful -- exact cost was fine at n=12 (25s) but not at n=14+
+    # (898s/call measured against the OLD SWAP-test fallback), so this must not follow the
+    # general threshold up that far without re-measuring against the new echo-test backend.
     injection_fid_kwargs = dict(fidelity_exact_threshold=injection_fidelity_exact_threshold,
                                 fidelity_samples=injection_fidelity_samples,
                                 fidelity_shots=injection_fidelity_shots)
@@ -1880,14 +1914,16 @@ def optimise_circuit_pipeline(
             qc_rebuilt_original_qubits.append(ci.operation, global_qargs, ci.clbits)
     print("\nRecomposed circuit (before interface SWAP and duplication):")
     print(qc_rebuilt_original_qubits.draw(output="text"))
-    fid_rebuilt = safe_fidelity_between_circuits(qc_rebuilt_original_qubits, qc_orig, **fid_kwargs)
+    fid_rebuilt = safe_fidelity_between_circuits(qc_rebuilt_original_qubits, qc_orig, **fid_kwargs,
+                                                 target_operator=target_operator_cache)
     print(f"Recomposed <-> original fidelity: {fid_rebuilt:.5f}")
     # 4.bis) Reinjection of the original inter-block gates into the recomposed circuit
     for inst, qargs, cargs in original_interblock_gates:
         global_qargs = [qc_rebuilt_original_qubits.qubits[qc.find_bit(q).index] for q in qargs]
         qc_rebuilt_original_qubits.append(inst, global_qargs, cargs)
     print("📎 Inter-block gates reinjected into the recomposed circuit.")
-    fid_rebuilt1 = safe_fidelity_between_circuits(qc_rebuilt_original_qubits, qc_orig, **fid_kwargs)
+    fid_rebuilt1 = safe_fidelity_between_circuits(qc_rebuilt_original_qubits, qc_orig, **fid_kwargs,
+                                                  target_operator=target_operator_cache)
     print(f"Recomposed (with inter-block gates) <-> original fidelity: {fid_rebuilt1:.5f}")
     print("\nRecomposed circuit with inter-block gates:")
     print(qc_rebuilt_original_qubits.draw(output="text"))
@@ -1906,18 +1942,22 @@ def optimise_circuit_pipeline(
     print("\nCircuit after inter-block injection:")
     print(qc_inj.draw(output="text"))
     print(f"# inter-block gates retained: {len(kept)}")
-    fid_inj = safe_fidelity_between_circuits(qc_inj, qc_orig, **fid_kwargs)
+    fid_inj = safe_fidelity_between_circuits(qc_inj, qc_orig, **fid_kwargs,
+                                             target_operator=target_operator_cache)
     print(f"Fidelity after inter-block injection <-> original: {fid_inj:.5f}")
     # 6) Fidelity-driven greedy injection (complement)
     qc_i, kept1 = fidelity_driven_injection(base_qc=qc_rebuilt_original_qubits, target_qc=qc_orig,
-                                            blocks=original_blocks, max_trials=300, fid_threshold=0.9999,
+                                            blocks=original_blocks, max_trials=fidelity_driven_max_trials,
+                                            fid_threshold=0.9999,
                                             fidelity_seed=fid_kwargs["seed"],
+                                            target_operator=target_operator_cache,
                                             **injection_fid_kwargs)
     print("\nCircuit after inter-block injection with NSGA2 (greedy):")
     print(qc_i.draw(output="text"))
     qc_i.draw('mpl', filename=f"final_optimized_circuitwithdriveninject.png", style='mpl', fold=1)
     print(f"# inter-block gates retained: {len(kept1)}")
-    fid_i = safe_fidelity_between_circuits(qc_i, qc_orig, **fid_kwargs)
+    fid_i = safe_fidelity_between_circuits(qc_i, qc_orig, **fid_kwargs,
+                                           target_operator=target_operator_cache)
     print(f"Fidelity after inter-block injection <-> original: {fid_i:.5f}")
     t_injection = time.perf_counter() - t_injection_start
     # 7) Final compression (choose the best base)
@@ -1937,8 +1977,9 @@ def optimise_circuit_pipeline(
     print(f"💰 Cost of the final optimized circuit (Lee et al. 2006): {cost_final}")
     t_compression = time.perf_counter() - t_compression_start
     # 8) Summary
-    fid_final = safe_fidelity_between_circuits(qc_opt, qc_orig, **fid_kwargs)
-    fidelity_backend = "exact" if qc_orig.num_qubits <= fidelity_exact_threshold else "swap_test_mc"
+    fid_final = safe_fidelity_between_circuits(qc_opt, qc_orig, **fid_kwargs,
+                                               target_operator=target_operator_cache)
+    fidelity_backend = "exact" if qc_orig.num_qubits <= fidelity_exact_threshold else "echo_test_mc"
     depth_before = qc_orig.depth()
     depth_after = qc_opt.depth()
     print("\n===== Final Summary =====")
@@ -1964,6 +2005,7 @@ def optimise_circuit_pipeline(
         "injection_fidelity_samples": injection_fidelity_samples,
         "injection_fidelity_shots": injection_fidelity_shots,
         "injection_fidelity_exact_threshold": injection_fidelity_exact_threshold,
+        "fidelity_driven_max_trials": fidelity_driven_max_trials,
         "depth_before": depth_before,
         "depth_after": depth_after,
         "fidelity_final": fid_final,

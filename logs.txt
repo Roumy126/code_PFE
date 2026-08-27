@@ -1,25 +1,21 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-27 (web research into the MOO algorithm
-landscape, split across two files: moo.txt documents the search
-itself; a new "FUTURE WORK — PARETO-DOMINANCE-BASED MOO ALGORITHMS"
-section at the end of this file records what it means for the
-research objective -- see that section for details. Previously
-(2026-08-26): fixed the second of the two scaling-stall
-mechanisms too -- fidelity_driven_injection was rebuilding+resimulating
-a dense operator from scratch on every one of its up to 300 trials per
-run; replaced with a cached-operator partial-trace fast path, verified
-exact, ~40x-and-growing speedup, turns previously-hanging 12/13-qubit
-runs into 26s/143s -- see "SCALING — FIDELITY-DRIVEN INJECTION FAST
-PATH FOUND AND FIXED" right after the SA fast-path note. Earlier the
-same day: found and fixed the sa_injection stall the same way (exact
-closed-form shortcut, ~1000x+ speedup) -- see "SCALING — SA INJECTION
-FAST PATH FOUND AND FIXED" right after "SCALING — DEFERRED" below.
-Previously (2026-08-25): research scope pivoted to a fixed 8-qubit
-benchmark set for now; resolved and fixed the NSGA-III open item -- see
-"OPEN ITEM — RESOLVED" below; and chose + implemented the research
-contribution angle -- SMS-EMOA plus mutation/hybrid-LAS ablations --
-see "RESEARCH ANGLE CHOSEN AND IMPLEMENTED" after the scaling notes)
+Last updated: 2026-08-27
+
+Recent activity (newest first; section titles below have full detail):
+- Scaling: replaced the injection stage's SWAP-test fidelity backend with a
+  cheaper equivalent "fidelity-echo" method, cached redundant operator
+  rebuilds, and exposed fidelity_driven_injection's trial count as a tunable
+  param. Practical qubit ceiling is now family-dependent (8-32q) rather than
+  a flat 8q. See "SCALING" below for current status and what's still open.
+- Research contribution chosen and implemented: SMS-EMOA as a second
+  per-block optimizer vs. NSGA-II, plus mutation-operator and hybrid-GA+LAS
+  ablations, with sweep results on the 8-qubit benchmark set. See "RESEARCH
+  ANGLE CHOSEN AND IMPLEMENTED".
+- Web research into the wider Pareto-dominance MOO algorithm landscape
+  (moo.txt) — see "FUTURE WORK — PARETO-DOMINANCE-BASED MOO ALGORITHMS".
+- NSGA-III implementation (NSGA-III/AG_multi_objectifs_NSGA3.ipynb) reviewed
+  and confirmed correct; 4 minor bugs fixed — see "OPEN ITEM — RESOLVED".
 
 =====================================================================
 PROJECT OVERVIEW
@@ -42,150 +38,100 @@ build step.
 =====================================================================
 REPOSITORY STRUCTURE (reading order / sophistication progression)
 =====================================================================
-1. AG_mono/
-   Mono-objective genetic algorithm: evolve a chromosome (gate
-   sequence) approximating a target unitary, optimizing fidelity only.
-
-2. NSGA-II/, NSGA-III/
-   Multi-objective versions (fidelity, depth, gate cost) using DEAP's
-   NSGA-II/NSGA-III selection.
-   NOTE: this checked-out copy DOES contain an NSGA-III/ directory
-   (AG_multi_objectifs_NSGA3.ipynb). Flagged for follow-up since this
-   fork was reported to be missing the NSGA-III implementation done
-   in a prior session — verify whether this notebook is the same
-   version, an earlier draft, or something else before assuming it
-   needs to be re-added.
-
-3. m1/, m1_bloc_indep/, M1_indicateurs_version/, M1_finale/
-   "M1" line of work: adds circuit partitioning into qubit blocks (so
-   NSGA-II runs per-block instead of on the whole circuit) plus
-   quality indicators (hypervolume, IGD, spread, epsilon).
-   M1_finale/ is the most complete/cleaned-up version, with extracted
-   .py scripts alongside its notebook.
+1. AG_mono/ — mono-objective GA: evolve a chromosome (gate sequence)
+   approximating a target unitary, optimizing fidelity only.
+2. NSGA-II/, NSGA-III/ — multi-objective versions (fidelity, depth,
+   gate cost) using DEAP's NSGA-II/NSGA-III selection. NSGA-III/
+   AG_multi_objectifs_NSGA3.ipynb exists only on this branch
+   (ULBS_qiea) — see "OPEN ITEM — RESOLVED" for its review status.
+3. m1/, m1_bloc_indep/, M1_indicateurs_version/, M1_finale/ — "M1"
+   line: adds circuit partitioning into qubit blocks (NSGA-II runs
+   per-block) plus quality indicators (hypervolume, IGD, spread,
+   epsilon). M1_finale/ is the most complete version.
    -> M1_finale/final_m1_script.py is the canonical, most-maintained
-      pipeline implementation (1485 lines).
+      pipeline implementation.
+4. m2_bloc_chevauche/ — "block overlap" variant: blocks may share
+   qubits at interfaces rather than being a strict partition.
+5. Final_test/, final_test_AG/, test/ — later validation notebooks
+   applying the pipeline to specific circuits (QAOA, MaxCut, W-state,
+   QFT, VQE, 14/64-qubit cases). Throwaway experiment copies, not a
+   distinct architecture.
 
-4. m2_bloc_chevauche/
-   "Block overlap" variant: blocks may share qubits at interfaces
-   rather than being a strict partition.
-
-5. Final_test/, final_test_AG/, test/
-   Later validation/experiment notebooks applying the pipeline to
-   specific target circuits (QAOA, MaxCut, W-state, QFT, VQE,
-   14/64-qubit cases, etc.), one subdirectory per experiment. These
-   are throwaway experiment copies, not a distinct architecture.
-
-Duplicated notebook snapshots (e.g. "code_travaille copy 3.ipynb",
-"test3D(1) copy.ipynb") are not divergent components — don't assume
-fixes need to be propagated across copies without checking first.
+Duplicated notebook snapshots (e.g. "code_travaille copy 3.ipynb")
+are not divergent components — don't assume fixes need to be
+propagated across copies without checking first.
 
 =====================================================================
 CORE PIPELINE (M1_finale/final_m1_script.py) — reference implementation
 =====================================================================
 Entry point: optimise_circuit_pipeline(...)
 
-1. Partitioning
-   - build_interaction_graph: qubit-interaction graph weighted by
-     2-qubit gate count.
-   - louvain_partition: Louvain community detection to split qubits
-     into blocks.
-   - multilevel_partition: Metis/Kernighan-Lin recursive alternative
-     for bounding block size.
-   - extract_interblock_gates: captures gates crossing block
-     boundaries for later reinjection.
-
-2. Sub-circuit extraction / recomposition
-   - extract_subcircuit: pulls a self-contained, locally-reindexed
-     circuit per block.
-   - recompose_from_blocks: stitches optimized block circuits back
-     into a global circuit in original gate order, preserving
-     inter-block gates unchanged.
-
-3. Fidelity metric
-   - compute_fidelity: operator-overlap fidelity
-     |Tr(U_circ . U_target^dagger)| / 2^n.
-   - Short-circuits to 1.0 above 15 qubits to avoid dense-matrix
-     blowup — this cap is why the pipeline is only exercised on
-     small/weakly-connected circuits despite claiming to scale.
-
-4. Intra-block optimization
-   - optimise_block_nsga2: DEAP NSGA-II per block, three objectives
-     (maximize fidelity, minimize transpiled depth, minimize
-     chromosome-length cost).
-   - update_rotation_angles: finite-difference local search ("LAS")
-     nudging rotation angles after the genetic search converges.
-
+1. Partitioning — build_interaction_graph (qubit-interaction graph
+   weighted by 2-qubit gate count), louvain_partition (Louvain
+   community detection into blocks; NOTE: no seed/random_state of its
+   own, see "SCALING" below), multilevel_partition (Metis/KL
+   alternative), extract_interblock_gates (captures cross-block gates
+   for later reinjection).
+2. Sub-circuit extraction / recomposition — extract_subcircuit /
+   recompose_from_blocks stitch optimized block circuits back into a
+   global circuit in original gate order.
+3. Fidelity metric — compute_fidelity: exact operator-overlap fidelity
+   |Tr(U_circ . U_target^dagger)| / 2^n, short-circuits to 1.0 above 15
+   qubits (dense-matrix blowup). safe_fidelity_between_circuits is the
+   scale-aware version used everywhere else in the pipeline — see
+   "SCALING" for its exact/approximate tiers and history.
+4. Intra-block optimization — optimise_block_nsga2 (DEAP NSGA-II,
+   3 objectives: maximize fidelity, minimize depth, minimize
+   chromosome-length cost) and optimise_block_smsemoa (hypervolume-
+   driven alternative, see "RESEARCH ANGLE CHOSEN AND IMPLEMENTED").
+   update_rotation_angles ("LAS") is an optional local angle-search
+   refinement after the GA (hybrid_las param).
 5. Inter-block gate injection (re-adds cross-block entanglement lost
-   during block-local optimization)
-   - sa_injection: simulated annealing over an energy combining gate
-     count, depth, crosstalk, fidelity penalty.
-   - stochastic_injection: random trial-and-keep-if-fidelity-improves.
-   - fidelity_driven_injection: simpler greedy variant, used as a
-     complementary final pass.
+   during block-local optimization) — sa_injection (simulated
+   annealing), stochastic_injection (random trial-and-keep), and
+   fidelity_driven_injection (greedy complement pass that ALWAYS runs
+   afterward regardless of injection_method, and per the 8-qubit
+   baseline usually produces the final circuit).
+6. Compression — hand-rolled passes (cancel_inverse_gates,
+   merge_rotations, remove_negligible_rotations, composed in
+   compress_custom) plus a Qiskit PassManager pass (qiskit_opt_pass).
+7. Multi-objective quality indicators — evaluate_run / compute_hv /
+   spread_delta / compute_spacing / compute_epsilon (hypervolume,
+   spread, spacing, epsilon, IGD when a reference front is supplied),
+   tracked per generation. Figures written to out_figs/.
 
-6. Compression
-   - Hand-rolled passes: cancel_inverse_gates, merge_rotations,
-     remove_negligible_rotations (composed in compress_custom).
-   - Standard Qiskit PassManager pass (qiskit_opt_pass):
-     Optimize1qGates + CommutativeCancellation.
-
-7. Multi-objective quality indicators
-   - evaluate_run / compute_hv / spread_delta / compute_spacing /
-     compute_epsilon: hypervolume, spread, spacing, epsilon indicator,
-     and IGD when a reference Pareto front (P_star) is supplied.
-   - Tracked across generations, not just best-fitness.
-   - export_all_indicators / plot_moo_history / save_plot /
-     plot_convergence / plot_pareto / plot_3d_clusters write PNGs to
-     out_figs/ (created on demand).
-
-Later stages depend on earlier ones' output shape (block list,
-per-block optimized circuit, kept-injection list) — check
+Later stages depend on earlier ones' output shape — check
 optimise_circuit_pipeline's call sequence before changing an output
-type.
-
-Also present: random_weakly_connected_circuit — generates synthetic
-test circuits (used by the 30-qubit and 64-qubit runnable examples).
+type. random_weakly_connected_circuit and the 4 benchmark generators
+(qaoa_maxcut_circuit, w_state_circuit, qft_circuit,
+hw_efficient_ansatz_circuit) generate the project's test circuits.
 
 =====================================================================
 CONVENTIONS SPECIFIC TO THIS CODEBASE
 =====================================================================
-- Chromosome encoding: individuals are Python lists of gene tuples
-  (gate_name, target_qubit, ctrl_qubit_or_None, angle_or_None). Any
-  new gate type added to a gate_pool needs matching branches in every
-  build/build_fn closure that turns chromosomes into QuantumCircuits
-  (these closures are redefined locally inside each optimisation
-  function rather than shared).
+- Chromosome encoding: (gate_name, target_qubit, ctrl_qubit_or_None,
+  angle_or_None). Any new gate type needs matching branches in every
+  build/build_fn closure (redefined locally per optimisation function).
 - DEAP creator classes (creator.FitnessMulti, creator.Individual) are
-  registered guarded by hasattr(creator, ...) checks since DEAP raises
-  on re-registration — preserve this guard across notebook re-runs.
-- Figures are a primary output, not incidental logging — stdout
-  progress prints use emoji status markers (checkmark/cross/money/
-  pin-style icons). Keep this pattern when extending a pipeline stage.
-- Comments, docstrings, print messages, plot labels, and markdown
-  prose are English throughout (originally French, translated in
-  full). The two thesis PDFs at the repo root remain in French
-  (academic writeups, not code).
-- Most heavy computation (chromosome fitness evaluation) is
-  parallelized via joblib.Parallel(n_jobs=...) — eval_ind-style
-  functions must stay picklable for multiprocessing.
+  registered guarded by hasattr(creator, ...) checks — preserve this
+  guard across notebook re-runs.
+- Figures are a primary output, not incidental logging — stdout uses
+  emoji status markers. Keep this pattern when extending a stage.
+- Comments/docstrings/prints/plots/markdown are English throughout
+  (originally French). The two thesis PDFs at the repo root remain
+  in French (academic writeups, not code).
+- Fitness evaluation is parallelized via joblib.Parallel(n_jobs=...) —
+  eval_ind-style functions must stay picklable for multiprocessing.
 
 =====================================================================
 SETUP / RUNNING
 =====================================================================
-pip install -r requirements.txt
+pip install -r requirements.txt   (pinned; deap/pandas/pymoo/pytest included)
 
-requirements.txt at repo root is incomplete for several
-notebooks/scripts — missing deap, pandas, pymoo (imported throughout,
-e.g. M1_finale/, most Final_test/* notebooks). M1_finale/requirements_m1.txt
-has the fuller list for that subproject (adds nbconvert, pylatexenc).
-
-No project-wide CLI entry point. Work happens by opening a notebook
-(jupyter notebook) or running an extracted .py script directly:
-  python M1_finale/final_m1_script.py     # full pipeline, generated 30-qubit circuit
-  python M1_finale/run_m1_test.py         # quick pipeline smoke test
-  python M1_finale/circuit_64qubits.py    # 64-qubit weakly-connected circuit run
-
-No lint/format/test commands exist — there is no test suite.
+No project-wide CLI entry point beyond run_experiment.py / run_sweep.py
+(see "REPOSITORY SETUP ROADMAP" below). Notebooks are opened directly
+via `jupyter notebook`. No lint/format commands; pytest is the only
+test tooling (tests/test_pipeline_smoke.py).
 
 Committed .venv/, mon_env/, envq/ are local virtualenvs (gitignored
 alongside __pycache__/, *.pyc, .ipynb_checkpoints/) — never edit files
@@ -194,1224 +140,309 @@ inside them.
 =====================================================================
 OPEN ITEM — RESOLVED (2026-08-25)
 =====================================================================
-Confirmed status of the NSGA-III implementation in this fork
-(NSGA-III/AG_multi_objectifs_NSGA3.ipynb):
-- git history shows the notebook was added wholesale in commit
-  2e445cef ("[ULBS] init", 2026-08-10) and only re-executed (cell
-  outputs only, no code change) in 62ca0e8e. It exists ONLY on the
-  ULBS_qiea branch (current branch) -- completely absent from main.
-  That branch gap is the most likely reason it was reported "missing":
-  whatever was being compared against was probably a main checkout,
-  which never received this file.
-- Read through the full implementation (34 cells) and ran it as a
-  smoke test (.venv, pop_size=8, generations=3-4, Agg backend). It is
-  a genuine, correct, hand-rolled NSGA-III (Deb & Jain, 2014): Das &
-  Dennis reference points (generate_reference_points), ASF-based
-  extreme-point normalization with a nadir-point fallback for the
-  degenerate-hyperplane case (normalize_objectives), perpendicular-
-  distance reference-point association (associate_to_reference_points),
-  and niching-based environmental selection (niching_selection) that
-  matches the paper's Algorithm 4/5 exactly, including normalizing
-  over St (already-accepted + last front) rather than the whole
-  population. Not DEAP's built-in selNSGA3 -- independently
-  implemented. No correctness bugs found.
-- Fixed 4 minor issues found during review, all in
-  NSGA-III/AG_multi_objectifs_NSGA3.ipynb:
-  1. mutate()'s structural insert/delete mutation used a hardcoded 0.1
-     probability, ignoring the mutation_rate parameter -- only the
-     gene-level mutation actually scaled with it. Now both mutation
-     types are governed by mutation_rate.
-  2. Gene tuple order was [target_qubit, gate, control, angle] (kept
-     from the older NSGA-II notebook it was adapted from), inconsistent
-     with the (gate_name, target_qubit, ctrl, angle) convention used in
-     M1_finale and documented in CLAUDE.md. Reordered to
-     [gate, target_qubit, control, angle] in generate_gene,
-     create_quantum_circuit, and compute_circuit_cost, plus the
-     markdown cell describing the encoding.
-  3. Removed leftover `pip install qiskit/pylatexenc/matplotlib` cells
-     (notebook now relies on the project's requirements.txt-based
-     .venv like everything else).
-  4. parallel_evaluation spawned a fresh joblib worker pool on every
-     call (twice per generation, ~400 times over a 200-generation
-     run). multi_objective_genetic_algorithm_nsga3 now opens a single
-     `with Parallel(n_jobs=-1) as parallel:` block spanning the whole
-     run and passes it through, reusing one pool instead of repeatedly
-     paying process-pool startup cost.
-  Verified after the fixes with the same smoke test: output is
-  byte-identical to the pre-fix run at generations 1-3 (mutation_rate
-  defaults to 0.1, matching the old hardcoded value, so behavior is
-  unchanged at default settings) and continues running cleanly past
-  that with no errors.
-- Not done: no diff against "a version built together in a prior
-  session" -- that prior-session context/version was not available to
-  compare against here. If that version turns up, it's still worth a
-  diff, but on its own this fork's copy is confirmed complete and
-  correct.
+Confirmed NSGA-III/AG_multi_objectifs_NSGA3.ipynb is a genuine, correct,
+independently hand-rolled NSGA-III (Deb & Jain 2014 — Das & Dennis
+reference points, ASF-based normalization with nadir fallback,
+perpendicular-distance association, niching selection matching the
+paper's Algorithm 4/5) — not DEAP's built-in selNSGA3. It exists only
+on this branch (added in commit 2e445cef), which is why it was reported
+"missing" against a main checkout. Fixed 4 minor issues found in review:
+mutate()'s structural mutation ignored mutation_rate (now scales with
+it); gene tuple order didn't match the project's (gate, target, ctrl,
+angle) convention (reordered); leftover pip-install cells removed;
+parallel_evaluation opened a fresh joblib pool every call (now one pool
+for the whole run). Verified byte-identical output at default settings
+after the fixes. Not done: no diff against an alleged prior-session
+version — that version was never available to compare against.
 
 =====================================================================
 NEXT STEPS — CANDIDATE MOO ALGORITHMS TO ADD
 =====================================================================
-Beyond NSGA-II/NSGA-III, the following multi-objective algorithms
-would fit naturally into the existing per-block optimization slot
-(currently optimise_block_nsga2 in M1_finale/final_m1_script.py) and
-could be added as interchangeable strategies, similar to how
-sa_injection / stochastic_injection / fidelity_driven_injection are
-already interchangeable for the injection stage.
-
-1. SMS-EMOA (S-Metric Selection EMOA)
-   - Hypervolume-indicator-driven selection instead of crowding
-     distance. Directly reuses the project's existing compute_hv
-     function as the selection criterion rather than just as a
-     post-hoc reporting metric — tightest synergy with code already
-     in the repo.
-   - Tends to produce better-distributed, higher-quality fronts than
-     NSGA-II for 2-3 objectives (fidelity, depth, cost), at higher
-     per-generation cost (hypervolume contribution calculation).
-
-2. IBEA (Indicator-Based Evolutionary Algorithm)
-   - Generalizes SMS-EMOA to arbitrary indicators; could plug in
-     compute_epsilon (already implemented) as the driving indicator
-     instead of hypervolume. Good candidate for comparing indicator
-     choices against each other using the project's own
-     evaluate_run/export_all_indicators reporting.
-
-3. MOEA/D (Decomposition-based MOEA)
-   - Decomposes the 3-objective problem (fidelity, depth, cost) into
-     scalar subproblems via weight vectors (Tchebycheff or weighted
-     sum), each solved cooperatively with neighbor information sharing.
-   - pymoo (already a project dependency per requirements notes) ships
-     a ready MOEA/D implementation — lowest implementation cost of
-     this list if built on pymoo rather than hand-rolled in DEAP.
-   - Conceptually maps well onto the block-partition architecture:
-     each qubit block could own a distinct region of weight-vector
-     space rather than all blocks running identical NSGA-II.
-
-4. SPEA2 (Strength Pareto EA 2)
-   - Classic alternative fitness assignment (strength + density via
-     k-th nearest neighbor) with an external archive of fixed size.
-   - Useful as a baseline comparison against NSGA-II on the same
-     3-objective problem to see whether NSGA-II's crowding distance
-     is actually the best diversity mechanism for this circuit search
-     space, or just the default choice inherited from earlier
-     iterations of the project.
-
-5. Multi-Objective Simulated Annealing (MOSA)
-   - The project already has single-objective SA for inter-block
-     injection (sa_injection, energy = weighted combination of gate
-     count, depth, crosstalk, fidelity penalty). A genuinely
-     multi-objective SA (Pareto-dominance-based acceptance criterion,
-     archive of non-dominated states) could replace that weighted-sum
-     energy function and produce a full injection-stage Pareto front
-     instead of a single injected solution.
-   - Lower implementation lift than the above since it extends
-     existing SA machinery (_sa_energy, _sa_rand_move, _sa_generate_pool)
-     rather than introducing a new population-based framework.
-
-6. MOPSO (Multi-Objective Particle Swarm Optimization)
-   - Different metaheuristic paradigm (swarm, not GA) — worth
-     including as a diversity-of-method comparison point in the
-     thesis, since all current algorithms (NSGA-II/III, SA variants)
-     are either GA- or SA-based.
-   - Chromosome encoding (gate_name, target_qubit, ctrl_qubit, angle)
-     would need a continuous-relaxation or discrete-PSO adaptation
-     before particles can be applied to gate sequences — higher
-     implementation cost than the others on this list.
-
-Suggested priority order given existing code reuse:
-  MOSA (extends sa_injection) > SMS-EMOA (reuses compute_hv) >
-  IBEA (reuses compute_epsilon) > MOEA/D (via pymoo) > SPEA2 > MOPSO.
+Beyond NSGA-II/NSGA-III/SMS-EMOA (done), these would slot into the same
+pluggable per-block-optimizer / injection-strategy pattern:
+1. MOSA (multi-objective SA) — extends existing sa_injection machinery
+   with Pareto-dominance acceptance + archive. Lowest lift.
+2. SMS-EMOA — DONE, see "RESEARCH ANGLE CHOSEN AND IMPLEMENTED".
+3. IBEA — generalizes SMS-EMOA; could plug in the already-implemented
+   compute_epsilon as the driving indicator instead of hypervolume.
+4. MOEA/D — pymoo (already a dependency) ships a ready implementation;
+   weight-vector decomposition maps naturally onto per-block regions.
+5. SPEA2 — classic strength+density baseline vs. NSGA-II's crowding
+   distance. If implemented, cite the 2025 IJCAI "SPEA2 Beats NSGA-II"
+   result rather than only the 2001 paper (see FUTURE WORK below).
+6. MOPSO — different paradigm (swarm, not GA); needs a continuous-
+   relaxation or discrete-PSO adaptation of the gate-sequence encoding.
+   Highest implementation cost of this list.
+Priority by reuse/cost: MOSA > SMS-EMOA [done] > IBEA > MOEA/D > SPEA2 > MOPSO.
 
 =====================================================================
 NEXT STEPS — IMPROVEMENTS FROM RELATED WORK (web research, 2026-08-18)
 =====================================================================
-Grounded in recent (2024-2026) literature on GA/MOO quantum circuit
-optimization, partitioning, and alternatives. Each item names why it
-applies to this specific codebase, not just in general.
-
-1. Hyperedge-aware partitioning instead of pairwise Louvain clustering
-   - build_interaction_graph/louvain_partition collapse multi-qubit
-     gates to pairwise edges and fix block structure via modularity.
-   - A 2025 dynamic hypergraph partitioning approach models gates as
-     hyperedges (qubit x time nodes) and sweeps block-count K with
-     METIS instead of assuming modularity picks the right K.
-   - Source: arXiv 2506.09963
-
-2. Cheaper fidelity proxy to replace the hard 15-qubit cutoff
-   [DEFERRED -- research is proceeding on a fixed 8-qubit benchmark
-   set for now; this item is parked along with the rest of the
-   scaling work. See "SCALING — DEFERRED" after Phase 2 below.]
-   - compute_fidelity short-circuits to 1.0 above 15 qubits — a
-     "Scalable Multi-Objective Genetic Algorithm for Quantum Circuit
-     Optimization" paper targets this exact bottleneck via a
-     projection-based approximation + structure-aware local metric
-     folded directly into NSGA-II, avoiding full dense-unitary builds.
-   - Source: nature.com/articles/s41598-026-47674-5 (worth reading in
-     full; preprint mirror was paywalled/403 at research time)
-
+Grounded in 2024-2026 literature on GA/MOO quantum circuit optimization:
+1. Hyperedge-aware partitioning (models gates as hyperedges, sweeps
+   block-count K with METIS instead of fixed modularity) — arXiv 2506.09963.
+2. Cheaper fidelity proxy past the 15-qubit cutoff [substantially
+   addressed by the 2026-08-27 fidelity-echo work, see "SCALING"] —
+   nature.com/articles/s41598-026-47674-5.
 3. Classical-shadow / tensor-network fidelity estimation for scale
-   [DEFERRED -- same as item 2 above, parked with the rest of the
-   scaling work.]
-   - Tensor-network-backed classical shadow tomography gives
-     sample-efficient fidelity/property estimation without building
-     the full 2^n x 2^n operator — would let the pipeline's scaling
-     claims actually be tested past 15 qubits instead of stubbed out.
-   - Source: arXiv 2209.02093
-
-4. Benchmark mutation operator combinations explicitly
-   - GECCO 2025 work found "swap+addition" maximizes fidelity but
-     grows depth, while "swap+addition+delete" gives a better
-     fidelity/depth balance.
-   - optimise_block_nsga2's mutation operators are currently a fixed,
-     one-off choice — this gives a citable, testable ablation to run
-     per-block and report on.
-   - Source: arXiv 2504.06413
-
-5. Formalize the hybrid GA + parameter-refinement split as a named,
-   compared variant
-   - A companion GECCO 2025 paper separates "hybrid" (GA + rotation-
-     parameter subroutine) from "pure" (mutation/crossover only)
-     variants, and tests both "build from scratch" and "refine
-     existing circuit" starting points.
-   - This project already has an ad-hoc version of the hybrid idea
-     (update_rotation_angles/LAS after NSGA-II) but has never
-     formalized it as a variant to compare against pure-GA — an easy
-     controlled experiment to add.
-   - Source: arXiv 2504.17561
-
-6. RL + ZX-calculus as a compression-stage alternative
-   - An RL agent (PPO + GNN) applying ZX-diagram rewrite rules scales
-     to 80 qubits / thousands of gates and beats hand-coded ZX
-     simplification strategies; a PyZX-based Qiskit transpiler pass
-     exists for integration.
-   - compress_custom's hand-rolled inverse-cancellation/rotation-
-     merging passes are exactly the category of hand-coded rule this
-     method outperforms — could be swapped in, or run as an
-     additional final compression pass.
-   - Source: arXiv 2312.11597 (Quantum, 2025)
-
-7. Add a noise/crosstalk-aware objective, not just math fidelity
-   - Frameworks like CQC (crosstalk-aware compilation) and CCMap
-     (coupler-aligned, noise-aware modular compilation; +21.9%
-     fidelity / -58.6% compile cost vs baselines in their reported
-     results) fold real device error rates and crosstalk into the
-     cost function rather than treating fidelity as pure unitary
-     overlap.
-   - Directly closes a gap this project's own docs already note (no
-     noise model, no coupling-map awareness) — could become a 4th
-     NSGA-II objective, or a term in the SA injection energy function
-     (_sa_energy already has a crosstalk term placeholder to extend).
-   - Sources: arXiv 2207.05751, arXiv 2505.09036
-
-8. Noise-weighted partition cuts
-   - DisMap/FitCut-style distributed compilation weights partition
-     boundaries by qubit error rate/topology, not just gate-crossing
-     count, when deciding where to cut.
-   - extract_interblock_gates/partitioning currently only minimizes
-     cross-block gate count — adding a hardware-error term would make
-     block boundaries reflect real device quality, complementing #7.
-
-Suggested priority given effort vs payoff for the thesis (items 2/3
-deferred along with the rest of the scaling work, see below):
-  #4 and #5 (cheap, purely experimental/ablation, no new deps) >
-  #1 (partitioning quality, moderate effort) >
-  #7/#8 (adds a genuinely new evaluation dimension — hardware realism
-  — but requires picking/simulating a device noise model) >
-  #6 (biggest potential compression win, but pulls in an external
-  RL+ZX-calculus dependency chain, best as a stretch goal).
+   [still open beyond what "SCALING" covers] — arXiv 2209.02093.
+4. Mutation operator ablation (swap+add vs swap+add+delete) — DONE, see
+   "RESEARCH ANGLE CHOSEN AND IMPLEMENTED" — arXiv 2504.06413.
+5. Formalized pure-GA vs hybrid-GA+LAS comparison — DONE, same section —
+   arXiv 2504.17561.
+6. RL + ZX-calculus as a compression-stage alternative to compress_custom's
+   hand-rolled passes (scales to 80q, PyZX/Qiskit integration exists) —
+   arXiv 2312.11597.
+7. Noise/crosstalk-aware objective (CQC, CCMap) — could become a 4th
+   NSGA-II objective or extend _sa_energy's crosstalk term placeholder —
+   arXiv 2207.05751, arXiv 2505.09036.
+8. Noise-weighted partition cuts (DisMap/FitCut-style) complementing #7.
+Priority given remaining budget: #4/#5 (done) > #1 (moderate effort) >
+#7/#8 (new evaluation dimension, needs a noise model) > #6 (biggest
+compression win, but an external RL+ZX dependency chain — stretch goal).
 
 =====================================================================
 NEXT STEPS — REPOSITORY SETUP ROADMAP FOR A DECEMBER JOURNAL SUBMISSION
 =====================================================================
 Goal: laptop-only compute, ~4 months (from 2026-08-18) to produce
-simulation results for a scientific journal. This roadmap is about
-repo/engineering setup to make that achievable, not about which
-research contribution to pursue (that's a separate, still-open
-decision — see the MOO-algorithm and related-work sections above for
-candidate angles).
+simulation results for a scientific journal. Addresses: no shared code
+(every notebook redefines its own functions), no experiment runner/
+structured output, no smoke tests (a silent bug after an overnight run
+is a full day lost).
 
-Problems this addresses:
-1. No shared code — every notebook redefines its own version of the
-   same functions, so nothing guarantees two experiments ran the same
-   code (a reproducibility problem reviewers will flag).
-2. No experiment runner / structured output — results lived as PNGs
-   in out_figs/ and stdout prints; a paper needs tables/figures built
-   from many runs across seeds/algorithms/circuit sizes, which needs
-   structured, aggregable data.
-3. No smoke tests — on a laptop-only budget, multi-hour/overnight
-   runs are precious; a silent bug found after an 8-hour run is a full
-   day lost.
+Phase 0 — foundation — DONE (2026-08-18): M1_finale made importable
+  as a module; run_experiment.py added (CLI runner: circuit + algorithm
+  config + --seed -> runs/<run_id>/{config,metrics}.json +
+  final_circuit.qpy); generations/pop_size exposed as real params
+  (were hardcoded); stochastic_injection's RNG properly seeded (was
+  unseeded, so "reproducible" runs weren't); fixed a real IndexError
+  when Louvain produces a singleton block (2-qubit gates couldn't
+  target it); tests/test_pipeline_smoke.py added (~10s smoke test);
+  requirements.txt pytest added. Discovered: DEAP's tournament
+  selection requires pop_size % 4 == 0 — now validated at the CLI.
 
-Phase 0 — foundation (~1-2 weeks) — DONE (2026-08-18, commit 35ed672d)
-  Implemented:
-  - M1_finale/__init__.py: the pipeline is now importable as a module
-    (from M1_finale.final_m1_script import ...) instead of only
-    runnable as a top-level script.
-  - run_experiment.py: CLI runner. Takes circuit config + algorithm
-    config + --seed, runs optimise_circuit_pipeline once, and writes
-    an isolated runs/<run_id>/ directory containing config.json,
-    metrics.json (numpy/set-safe JSON), and final_circuit.qpy (so the
-    optimized circuit itself can be reloaded later, not just its
-    metrics) -- instead of overwriting loose PNGs/stdout in the cwd.
-  - optimise_circuit_pipeline: generations/pop_size were hardcoded
-    (500/400) inside the block-optimization call; now exposed as real
-    parameters so a CLI/smoke test can override them.
-  - stochastic_injection: was using an *unseeded* random.Random() --
-    meaning any run using the default injection_method="stochastic"
-    was never actually reproducible regardless of any outer seeding.
-    Now takes a seed param, wired to the pipeline's existing sa_seed.
-  - Bug fix: optimise_block_nsga2 crashed (IndexError) whenever
-    Louvain produced a singleton (1-qubit) block, because its gate
-    pool always included 2-qubit gates (cx/cz/rzz) with no second
-    qubit available to target. Now 2-qubit gates are excluded from
-    the pool when the block has < 2 qubits. This is a real, latent
-    bug that a laptop-scale sweep would have hit often (small/weakly
-    connected circuits partition into many singleton blocks) --
-    worth knowing this existed silently before now.
-  - tests/test_pipeline_smoke.py: pytest smoke test, runs the full
-    partition -> NSGA-II -> injection -> compression pipeline on a
-    tiny 6-qubit two-cluster circuit in ~10s. Catches pipeline-
-    breaking regressions before a long run, not optimization quality.
-  - requirements.txt: added pytest; deap/pandas/pymoo were already
-    present in this checkout (CLAUDE.md's note that they're missing
-    is stale as of this commit).
-  - Discovered constraint (not a bug, just undocumented): DEAP's
-    NSGA-II tournament selection (selTournamentDCD) requires
-    pop_size % 4 == 0. run_experiment.py now validates this at the
-    CLI level with a clear error instead of a mid-run crash.
-  Not done from the original Phase 0 sketch: none -- the results
-  aggregator was always slated for Phase 1, since it needs several
-  runs to exist first.
+Phase 1 — experiment infrastructure — DONE (2026-08-19): per-stage
+  wall-clock timing (meta["stage_timings_s"]); chromosome-level
+  memoization in optimise_block_nsga2; run_sweep.py added (resumable
+  multi-seed sweep runner, subprocess-per-config for crash isolation);
+  aggregate_results.py added (runs/*/*.json -> runs/results_master.csv).
+  Discovered: update_rotation_angles ("LAS") was dead code (defined,
+  never called) until the SMS-EMOA work later wired it in via
+  hybrid_las.
 
-Phase 1 — experiment infrastructure (~2-3 weeks) — DONE (2026-08-19)
-  Implemented:
-  - Stage-level timing: optimise_circuit_pipeline (M1_finale/final_m1_script.py)
-    now records wall-clock time per stage into
-    meta["stage_timings_s"] = {partitioning, block_optimization,
-    injection, compression}. Flows through into every run's
-    metrics.json automatically (run_experiment.py already serializes
-    the full meta dict) -- no CLI changes needed.
-  - Memoization: optimise_block_nsga2 now dedupes identical chromosomes
-    (keyed on tuple(individual)) before dispatching to joblib.Parallel,
-    via a cache scoped to the function call and living entirely in the
-    parent process -- safe under joblib's default loky (process)
-    backend since workers stay pure functions. Dedup opportunities come
-    from low-probability mate/mutate skips reproducing an already-seen
-    genome, more frequent as a population converges.
-  - Discovered while scoping this: update_rotation_angles ("LAS", the
-    local angle-search step CLAUDE.md describes as following NSGA-II)
-    is defined but never called anywhere in the pipeline -- dead code
-    today. Left unmemoized since optimizing unused code is pure waste;
-    flagged here as a latent gap rather than silently left unexplained.
-  - run_sweep.py (new, repo root): resumable multi-seed sweep runner.
-    Enumerates an (n_qubits x injection_method x seed) grid, runs each
-    combination as its own subprocess (crash isolation; no leftover
-    matplotlib figures / DEAP creator state / joblib worker pools
-    carried across runs), and skips any combination whose
-    runs/<run_id>/metrics.json already exists -- the resumability
-    mechanism, no separate state file needed. run_id encodes every
-    varied parameter (including generations/pop_size) so changing a
-    fixed setting can't silently collide with a stale prior run.
-    Verified: a tiny 4-config grid ran end-to-end, then an identical
-    re-run skipped all 4.
-  - aggregate_results.py (new, repo root): scans runs/*/{config.json,
-    metrics.json} into one pandas DataFrame (config + metrics +
-    per-stage timings + per-block MOO indicator means: mean_hv,
-    mean_spread, mean_spacing, total_n_pareto), written to
-    runs/results_master.csv. Skips (warns, doesn't crash) any run
-    directory missing metrics.json (still running or failed).
-    Verified against the tiny sweep's 4 runs -- fidelity in [0,1],
-    depths/costs non-negative.
-  - tests/test_pipeline_smoke.py: extended with an assertion on the new
-    stage_timings_s field (keys present, all values >= 0).
-  - README.md: added a "Running experiments" section documenting
-    run_experiment.py / run_sweep.py / aggregate_results.py / pytest,
-    and filled in previously-undocumented Project Structure entries
-    (M1_finale/, runs/, tests/) -- these existed since Phase 0 but were
-    never added to the README.
-  Not done from the original Phase 1 sketch: none -- all four listed
-  items (aggregator, sweep runner, memoization, stage timing) are
-  implemented.
-  Out of scope, not touched: M1_finale/final_m1.ipynb (the notebook
-  final_m1_script.py was extracted from) was not updated to mirror
-  these changes, per this project's convention of not auto-syncing
-  duplicated notebook/script pairs without checking first.
-
-Phase 2 — fixed benchmark suite (through November) — PARTIALLY DONE (2026-08-19)
-  Implemented (circuit generators):
-  - Surveyed every notebook under Final_test/ and final_test_AG/ before
-    writing anything new (two parallel Explore agents). Key finding:
-    the final_test_AG/* notebooks (etatW, qft4, vqe, test2, tryaleatore)
-    don't use optimise_circuit_pipeline at all -- they run an older,
-    fully inlined mono-objective GA. Only their target circuits were
-    worth lifting, not their GA code.
-  - qaoa_maxcut_circuit (M1_finale/final_m1_script.py): generalizes
-    Final_test/3dplot/qaoa's fixed 12-qubit ring+chord MaxCut graph to
-    arbitrary n_qubits (odd n drops the last unmatched chord). gammas/
-    betas default to seeded-random draws instead of the notebook's
-    fixed constants, so multi-seed sweeps actually vary the circuit.
-  - w_state_circuit: generalizes final_test_AG/etatW's fixed 5-qubit
-    ry+cx ladder via its closed-form angle formula
-    (theta_k = 2*arccos(sqrt((n-k)/(n-k+1)))) -- picked over
-    Final_test/wstate's more complex CZ-based 10-qubit construction of
-    the same state, since it was already algebraically parametric.
-  - qft_circuit: uses qiskit's synth_qft_full rather than generalizing
-    final_test_AG/qft4's hand-written 4-qubit h/cp/swap ladder, and
-    rather than qiskit.circuit.library.QFT -- caught via a
-    -W error::DeprecationWarning test run that QFT is deprecated as of
-    Qiskit 2.1 and slated for removal in Qiskit 3.0 (same Qiskit-3.0-
-    proofing concern as the 2026-08-18 dependency audit).
-  - hw_efficient_ansatz_circuit: generalizes final_test_AG/vqe's fixed
-    4-qubit circuit (H layer + ry/rz + linear cx chain). That notebook
-    folder is misnamed -- there's no cost Hamiltonian or optimizer
-    anywhere in it, just a hardware-efficient-style ansatz -- so the
-    generator is named for what it structurally is instead of
-    perpetuating the "VQE" label.
-  - random_weakly_connected_circuit gained a **_ignored so run_experiment.py
-    can pass one uniform kwarg set to every generator.
-  - run_experiment.py: all four wired into CIRCUIT_GENERATORS as
-    "qaoa_maxcut"/"w_state"/"qft"/"hw_efficient_ansatz", plus
-    --qaoa-p/--qaoa-gammas/--qaoa-betas/--ansatz-reps flags.
-  - tests/test_pipeline_smoke.py: one parametrized end-to-end case per
-    new generator. Verified: full suite passes clean under
-    -W error::DeprecationWarning; each generator also run through the
-    real CLI (python run_experiment.py --circuit <name> ...) producing
-    valid metrics.json, then picked up correctly by
-    aggregate_results.py alongside weak_random rows.
-  Not done: "14/64-qubit cases" needed no new work -- they're the same
-  weak_random pattern at larger --n-qubits, already covered.
-  The various fixed 3/5/7/8/10-qubit one-off circuits (CSWAP, the
-  generic hand-written "random" helper, tryaleatore's hardcoded
-  sequence) were left alone -- either already covered by weak_random or
-  too idiosyncratic to be worth generalizing, and not part of the named
-  QAOA/MaxCut/W-state/QFT/VQE set.
-  Discovered, flagged as a separate future decision, not acted on here:
-  Final_test/nex_formula has an unused SWAP-test-based approximate-
-  fidelity estimator (via qiskit_aer) directly relevant to scaling
-  fidelity computation past small circuit sizes -- a fidelity-metric
-  change, not a circuit generator, so out of scope for this phase (and
-  deferred along with the rest of the scaling work, see below).
-
-  Second bullet ("run whatever comparisons the paper ends up needing
-  across this fixed benchmark set x seeds") -- baseline sweep run, one
-  real research finding worth keeping:
-  - A 20-run baseline (n_qubits=8, 2 seeds, both injection methods)
-    surfaced that fidelity_final, depth_after, and cost_after were
-    bit-identical between injection_method="sa" and "stochastic" in
-    18/20 cases, despite sa taking 3-6x longer.
-  - Root cause traced to optimise_circuit_pipeline (M1_finale/
-    final_m1_script.py): step 6 (fidelity_driven_injection, a greedy
-    complement pass that ignores injection_method entirely) runs
-    unconditionally after step 5 (sa_injection/stochastic_injection),
-    and the pipeline keeps whichever of the two has higher fidelity.
-    meta["kept_injections"] was always reporting step 5's kept list
-    even when step 6's circuit was the one actually used as qc_opt --
-    an observability bug, not just a confusing coincidence. Fixed:
-    meta now records kept_injections from whichever path actually won,
-    plus new fields injection_path_used, fidelity_after_injection_method,
-    and fidelity_after_fidelity_driven_greedy so this is visible
-    per-run instead of requiring code-reading to explain. Surfaced in
-    aggregate_results.py's master table too.
-  - Re-ran the 20-run baseline with the fix: confirms it quantitatively
-    -- fidelity_driven_greedy won 18/20 (48/50 once the full 8-qubit
-    grid finished), the 2 exceptions being ties where sa/stochastic's
-    own result exactly matched greedy's. Conclusion: at this fidelity
-    regime (raw fidelities 0.006-0.28, nowhere near the 0.9999
-    threshold), sa is currently wasted compute -- it rarely changes the
-    outcome and costs 3-6x more than stochastic for the same result.
-  - Grid scoped to 8 qubits for all 5 circuits (run_sweep.py's
-    CIRCUIT_QUBIT_SIZES): all 50 configs (5 circuits x 8q x 2 injection
-    methods x 5 seeds) ran successfully; runs/results_master.csv holds
-    a real (not tiny-smoke) dataset confirming the injection-path
-    finding at full seed count (48/50 fidelity_driven_greedy).
-  Current status: this 8-qubit, 50-run dataset is the basis the
-  research is moving forward on. Larger qubit tiers (12/16/20q) were
-  attempted and repeatedly hit performance walls in the fidelity/
-  injection stages -- deferred rather than continuing to debug them
-  now; see "SCALING — DEFERRED" immediately below.
+Phase 2 — fixed benchmark suite — PARTIALLY DONE (2026-08-19):
+  4 new parametric circuit generators added (qaoa_maxcut_circuit,
+  w_state_circuit — closed-form W-state angles, qft_circuit — via
+  qiskit's synth_qft_full since circuit.library.QFT is deprecated,
+  hw_efficient_ansatz_circuit), wired into run_experiment.py/tests.
+  Key research finding from the resulting 8-qubit, 50-run baseline
+  (5 circuits x 2 injection methods x 5 seeds): fidelity_driven_injection
+  (the greedy complement pass, runs unconditionally) produced the final
+  circuit in 48/50 runs regardless of --injection-method, and sa vs.
+  stochastic were bit-identical results in most cases despite sa taking
+  3-6x longer — at this fidelity regime (raw fidelities 0.006-0.28,
+  well below the 0.9999 threshold), sa was wasted compute. (Revisit
+  after the 2026-08-26/27 fixes — see "SCALING" — since sa is now ~1000x
+  cheaper and this comparison was never re-run at equal cost.) Also
+  fixed an observability bug: meta["kept_injections"] always reported
+  the sa/stochastic path's list even when the greedy pass actually won;
+  now meta records injection_path_used and both paths' fidelities.
   Not started: the actual paper-scale research comparisons (blocked on
-  choosing a research-contribution angle -- see the MOO-algorithm and
-  related-work sections above).
+  choosing a contribution — resolved by "RESEARCH ANGLE CHOSEN AND
+  IMPLEMENTED" below). Not done: no dedicated noise model; scaling past
+  8 qubits was deferred at the time (see "SCALING").
+
+Phase 3 — paper writing (November-December) — NOT STARTED. Plan:
+  generate all figures/tables directly from results_master.csv via
+  script, not hand-tweaked per notebook.
 
 =====================================================================
-SCALING — DEFERRED (2026-08-25)
+SCALING
 =====================================================================
-Between 2026-08-19 and 2026-08-24, significant effort went into making
-fidelity computation and the inter-block injection stage tractable
-past 8 qubits (replacing the dense-Operator fidelity cutoff with a
-SWAP-test/MPS-based estimator, tuning exact-vs-approximate fidelity
-thresholds, fixing BLAS thread contention, etc.). That work repeatedly
-hit hangs and multi-hour runtimes on genuinely entangled circuit
-families (qaoa_maxcut, w_state, qft, hw_efficient_ansatz) at 12+
-qubits, and was not fully resolved.
+Status as of 2026-08-27: the pipeline's fidelity computation has two
+tiers — exact (dense Operator trace, n <= fidelity_exact_threshold,
+default 13) and approximate (Monte-Carlo estimate above it). Both tiers
+had genuine performance bugs; all found-and-fixed so far were redundant
+computation, not new algorithms, and were verified either byte-identical
+or algebraically exact before adoption.
 
-Decision: stop spending time on this for now. The research is moving
-forward on the existing 8-qubit dataset (50 runs across all 5 circuit
-families, both injection methods, 5 seeds -- see Phase 2 above), which
-is complete, fast, and has never hit a performance wall. Scaling past
-8 qubits will be revisited later as a separate, dedicated effort.
+Timeline of what was found and fixed:
+- 2026-08-25: research scope pivoted to a fixed 8-qubit benchmark set
+  after 12/16/20-qubit attempts repeatedly hung/took hours (deferred
+  rather than debugged blind).
+- 2026-08-26: profiled instead of guessing, and found the injection
+  stage's three main strategies were each independently rebuilding and
+  re-simulating whole circuits on every one of hundreds of trials, when
+  each had a cheap closed-form or cached-operator shortcut available:
+  sa_injection's energy check compares a candidate against its own
+  unchanged base, so the base cancels out algebraically (~1000x+
+  speedup, exact); fidelity_driven_injection caches the candidate/target
+  operator product once and updates it incrementally per trial via a
+  partial-trace identity instead of rebuilding from scratch (~40x+,
+  exact, verified bit-identical); stochastic_injection's one-gate-diff
+  fidelity reduces to a 4x4 local trace with zero dependence on circuit
+  size (~900x+, exact). Combined effect: real qaoa_maxcut pilot sweeps
+  at n=12/13 (previously infeasible) completed in under 10 minutes, and
+  n=12 became practical at full production GA settings across all 5
+  benchmark families (~80-240s/run).
+- 2026-08-27: cached the pipeline's 5 reporting-level fidelity checks'
+  shared target-circuit operator, which was being rebuilt from scratch
+  on every call despite the target never changing (~1.4x faster at
+  n=12/13, verified byte-identical).
+- 2026-08-27: replaced the approximate tier's SWAP-test estimator with
+  an algebraically equivalent but much cheaper "fidelity-echo" circuit
+  (same target quantity |<psi|U^dagger V|psi>|^2, computed on n qubits
+  instead of 2n+1, with no CSWAP-induced entanglement between two
+  coupled registers) — the SWAP test's own construction, not entanglement
+  in the target circuits per se, was what made it exponentially
+  expensive for genuinely entangled families (QAOA/QFT/W-state/hw-
+  efficient-ansatz). Verified correct against exact values and the old
+  estimator; a case that used to hang 5+ minutes per call now takes
+  ~0.06s. Renamed accordingly (fidelity_backend: "swap_test_mc" ->
+  "echo_test_mc"; CLI flags --fidelity-swap-* -> --fidelity-echo-*).
+- 2026-08-27: mapped the new backend's actual per-family reach and found
+  qaoa_maxcut is the one family that's still genuinely hard past ~n=16
+  (its graph structure really does get more entangled as n grows — a
+  physical limit, not a software artifact). The other 4 families
+  (weak_random, w_state, hw_efficient_ansatz, qft) now scale comfortably
+  to n=20-32+. Root-caused why QAOA still stalled at n=16 even with the
+  fix: fidelity_driven_injection's max_trials was hardcoded at 300 (the
+  one stage-iteration-count never exposed as a tunable parameter) with
+  no incremental-cache fast path above the approximate-tier threshold.
+  Exposed it as --fidelity-driven-max-trials (default unchanged); a
+  previously-stuck n=16 QAOA run completed in ~200s once it and the
+  reporting-level sample/shot counts were turned down.
 
-Note: M1_finale/final_m1_script.py, run_experiment.py, and
-aggregate_results.py still carry code from this scaling work (already
-committed -- e.g. fidelity_exact_threshold=13 / injection_fidelity_
-exact_threshold=12 defaults, the SWAP-test/MPS fidelity backend). Since
-those thresholds are all well above 8 qubits, they don't change
-behavior at the current 8-qubit scope -- left in place rather than
-reverted, but not being built on further for now. run_sweep.py's
-CIRCUIT_QUBIT_SIZES was reset to [8] for every circuit (was still
-defaulting to 12/16/20q, which would have silently resumed the paused
-large-qubit sweep on the next run) -- pass --n-qubits to override for a
-one-off run past 8 qubits.
+Current practical qubit ceiling (approximate-tier, injection-stage
+defaults): weak_random / w_state / hw_efficient_ansatz / qft comfortably
+handle n=20-32+; qaoa_maxcut needs lower --fidelity-driven-max-trials /
+--fidelity-echo-samples / --fidelity-echo-shots past ~n=16.
+run_sweep.py's CIRCUIT_QUBIT_SIZES is still capped at [8] for every
+circuit — a conservative baseline default now, not a technical limit —
+left unchanged since raising it is a real methodology decision, not a
+side effect of a backend fix.
 
-=====================================================================
-SCALING — SA INJECTION FAST PATH FOUND AND FIXED (2026-08-26)
-=====================================================================
-Revisited the 12+ qubit stall from "SCALING — DEFERRED" above, this
-time by profiling instead of guessing. Root cause, isolated empirically
-before touching any code:
-
-- compute_fidelity's dense-Operator cost is exponential in qubit count
-  regardless of entanglement (expected) -- but the SWAP-test/MPS
-  estimator added during the deferred scaling work turned out to be
-  exponential in entanglement, not qubit count. A single swap-test call
-  on a genuinely entangled 10-qubit QAOA circuit hung for 5+ minutes
-  (measured against a code comment claiming ~0.06-0.08s, validated only
-  for the weakly-connected circuit family, not entangled ones).
-- Bond-dimension-capping the MPS backend (an obvious first fix) turned
-  out to be a bad tradeoff on this circuit family: even bond=128
-  (12s/call) was still 0.03-0.05 off the true fidelity, and the cheap
-  bond dims (16-32, sub-second) were off by 0.10-0.15 -- far too
-  imprecise for the injection stage's fid_threshold=0.999 accept/reject
-  decision. Rejected in favor of investigating further.
-- Switching the swap-test backend to exact statevector simulation was
-  strictly better than MPS (exact, not approximate; also faster at low
-  n) but hits its own hard wall at n~14-15 (2n+1 > 31 total qubits,
-  independent of entanglement) -- and even below that wall, accounting
-  for the pipeline's samples=8 Monte-Carlo averaging, a single fidelity
-  call already reached ~14s at n=12 and ~4 minutes at n=14. With
-  sa_injection's default n_iters=2000, that's 8+ hours at n=12 alone --
-  no backend swap fixes this on its own.
-- The actual fix: sa_injection's energy function (_sa_energy) always
-  calls safe_fidelity_between_circuits(cand, target_qc, ...) with
-  target_qc being the exact same object as base_qc (sa_injection calls
-  it as _sa_energy(..., base=base_qc, target_qc=base_qc, ...)), and
-  cand is always base_qc with the currently-enabled injection gates
-  appended on top. Algebraically, U_cand @ U_base^dagger = product of
-  the enabled injection gates exactly -- base_qc cancels out regardless
-  of its size, structure, or entanglement. So the "exact" fidelity this
-  loop was simulating on every one of its up to ~2030 iterations
-  (30 temperature-sampling + n_iters=2000 + 1 final check) was always
-  computable in closed form from a handful of qubits, without touching
-  base_qc's simulation at all. Verified empirically at n=9/11 (bit-
-  identical to the simulated result) before implementing.
-
-Implemented in M1_finale/final_m1_script.py:
-- New _injections_self_fidelity(injections, n_qubits): builds a tiny
-  local circuit over just the qubits the enabled injections touch,
-  computes |Tr(local unitary)| / 2^k directly via Operator -- no
-  simulation of base_qc, cost independent of total qubit count n.
-- _sa_energy now uses this fast path whenever target_qc is base
-  (Python identity check, matching sa_injection's actual calling
-  convention exactly), falling back to the original simulated path
-  otherwise so nothing breaks if that calling convention ever changes.
-- sa_injection's final post-loop fidelity check (previously another
-  safe_fidelity_between_circuits(final_circ, base_qc, ...) call) now
-  uses the same closed form for the same algebraic reason.
-
-Verified:
-- _sa_energy's fast path vs. the old simulated path (forced via a
-  distinct-object copy of base_qc to defeat the identity check):
-  bit-identical energy values.
-- Full sa_injection run, n=11, 200 iterations: pre-patch did not finish
-  in a 10-minute timeout; post-patch: 0.59s.
-- At the pipeline's actual defaults (n_iters=2000): n=14 -> 6.81s,
-  n=20 -> 6.28s -- this is the exact configuration that used to hang
-  for hours during the deferred scaling work.
-- Full pytest smoke suite (tests/test_pipeline_smoke.py, 11 tests):
-  all pass, no behavior change, no new warnings.
-
-Scope, explicitly checked and NOT extended:
-- fidelity_driven_injection compares candidate circuits against the
-  true original target_qc, which is structurally unrelated to the
-  candidate (built via independent per-block re-optimization) -- the
-  base cancellation trick does not apply; this remains a genuine global
-  fidelity computation with no cheap shortcut found yet.
-- stochastic_injection compares cand (= qc + one gate, then run through
-  compress_custom) against qc -- algebraically similar to the SA case,
-  but compress_custom's remove_negligible_rotations pass is NOT exactly
-  unitary-preserving, and its effect is largest exactly in the near-
-  zero-rotation-angle region where stochastic_injection's trials
-  actually get accepted (the only region where |Tr(gate)|/2^k is close
-  enough to 1.0 to pass fid_threshold=0.999 in the first place). A
-  closed-form shortcut here risked silently diverging from current
-  behavior in precisely the cases that matter, so it was left alone
-  rather than risk an unverified correctness change.
-
-Implication for the paper's injection-method finding (Phase 2 above,
-"sa is currently wasted compute -- it rarely changes the outcome and
-costs 3-6x more than stochastic"): that finding was measured against
-the old, cost-constrained SA. Now that SA is roughly 1000x cheaper and
-no longer bottlenecked by redundant simulation, it may be worth
-re-running the injection-method comparison -- SA can now afford far
-more iterations/candidates than before at the same wall-clock budget,
-which could change the outcome.
-
-Not resolved by this fix: the other scaling blocker from "SCALING —
-DEFERRED" above (fidelity_driven_injection's greedy pass, which always
-runs and dominates 48/50 baseline outcomes per Phase 2, and per-block
-NSGA-II/SMS-EMOA fidelity evaluation at higher n) is untouched -- this
-fix only removes sa_injection's specific redundant-simulation stall,
-it does not lift the 8-qubit benchmark ceiling on its own. Revisiting
-the 12+ qubit sweep would still need a similar investigation into
-fidelity_driven_injection's cost before it could actually run to
-completion at that scale.
-
-=====================================================================
-SCALING — FIDELITY-DRIVEN INJECTION FAST PATH FOUND AND FIXED
-(2026-08-26)
-=====================================================================
-Followed up on the open item flagged at the end of the sa_injection fix
-above: fidelity_driven_injection (the greedy pass that always runs and
-dominates 48/50 baseline outcomes per Phase 2) was profiled directly
-rather than assumed. Confirmed it is a genuine second bottleneck, and
-found a different (non-identical, but related) closed-form shortcut
-than the sa_injection one.
-
-Profiling: a single trial of fidelity_driven_injection (one
-safe_fidelity_between_circuits call inside its loop) took ~4.2s at
-n=11. At the function's default max_trials=300, that is ~21 minutes at
-n=11 alone, worse at higher n -- consistent with, and now explaining,
-part of the multi-hour stalls from "SCALING — DEFERRED" above.
-
-Why this one does NOT reduce the same way as sa_injection: sa_injection
-always compared a candidate against its own unchanged base (target_qc
-is base_qc, literally the same object), so the base cancelled out of
-the trace exactly. fidelity_driven_injection compares against the true
-original target_qc, called as
-fidelity_driven_injection(base_qc=qc_rebuilt_original_qubits,
-target_qc=qc_orig, ...) -- base_qc and target_qc are genuinely
-different circuits (per-block re-optimization replaced base_qc's
-internal block gates), so there is no algebraic cancellation and no
-constant-time closed form.
-
-What DOES reduce, found by re-examining the loop's actual structure:
-every trial only ever appends ONE gate to the CURRENT candidate_qc
-(U_test = G_trial @ U_candidate), and candidate_qc only changes on
-acceptance (rare relative to max_trials). So:
-- Cache M = U_candidate @ U_target^dagger once (an expensive, O(4^n)-
-  ish dense build) rather than rebuilding+resimulating a full circuit
-  comparison on every trial.
-- Each trial's fidelity is then a partial trace of the CACHED M over
-  just the 2 qubits the trial's gate touches, via the standard
-  identity Tr((G_loc embedded) @ M) = Tr(G_loc @ R) where R is M's
-  partial trace onto those 2 qubits -- a 4x4 matrix trace, independent
-  of n. New helper: _partial_trace_reduce(M, n, keep_qubits).
-- On acceptance, M does not need rebuilding from scratch either: since
-  M = U_candidate @ U_target^dagger and U_candidate_new = G_embedded @
-  U_candidate, algebraically M_new = G_embedded @ M_old. New helper
-  _apply_local_gate_to_operator(M, n, G_loc, q1, q2) applies this via
-  a tensor contraction (reshape + moveaxis + small matmul) instead of
-  building the full 2^n x 2^n embedded gate matrix, at a cost that
-  does NOT grow as the accepted circuit gets deeper (unlike rebuilding
-  Operator(candidate_qc), which resimulates the whole, ever-growing
-  circuit from scratch every time).
-- Both helpers are exact linear algebra, not approximations. Used only
-  when n <= fidelity_exact_threshold (matching the existing exact/
-  SWAP-test-MC branch point in safe_fidelity_between_circuits); falls
-  back to the original per-trial simulated path above that threshold.
-
-Bug caught during implementation, worth recording: the first version
-of both helpers had a qubit-ordering bug that only showed up on
-asymmetric gates (cx) -- symmetric gates (cz, rzz) matched immediately
-on the first attempt, masking the bug for half the gate pool. Root
-cause: Qiskit's little-endian convention (qubit 0 = LSB) means the
-*first* qubit named in a 2-qubit gate call maps to the *last*/most-
-significant axis position when embedding into a larger tensor, not the
-first -- both helpers needed keep_qubits reversed relative to the
-naive ordering. Caught by testing against qiskit's own gate embedding
-directly rather than trusting the derivation, exactly as with the
-earlier _injections_self_fidelity work.
-
-Verified:
-- kept_injections list byte-identical to the original per-trial-
-  simulated version (n=9, 40 trials, both list the same 9 gates with
-  the same angles in the same order).
-- n=9, 40 trials: 6.60s (original) -> 0.80s (partial-trace fast path
-  only) -> 0.17s (+ incremental M update) -- ~39x total.
-- n=12, 300 trials (the function's real default): 25.85s -- the same
-  configuration that previously did not complete within a 300s bound.
-- n=13, 300 trials: 143.23s -- also previously did not complete within
-  300s.
-- Full pytest smoke suite (11 tests): all pass, no behavior change, no
-  new warnings.
-
-Scope: this removes the O(max_trials) redundant-simulation cost, but
-NOT the one-time O(4^n)-ish cost of the initial Operator(candidate_qc)/
-Operator(target_qc) builds at the start of the function -- that part
-is unavoidable at the exact-fidelity tier and is why n=13 (143s) is
-still meaningfully slower than n=12 (26s). This does not touch the
-separate n~14-15 wall from the SWAP-test/MPS backend documented in the
-sa_injection fix's context above (statevector-based swap test hits a
-hard 31-total-qubit cap; MPS is exponential in entanglement, not qubit
-count) -- circuits past roughly n=13-14 still need that problem solved
-separately before a 12+ qubit sweep could run to completion end-to-end.
-
-Combined effect of both fixes (sa_injection + fidelity_driven_injection):
-the two injection strategies that dominate the pipeline's per-run cost
-at the current fidelity_exact_threshold tier are both now either near-
-free (sa_injection) or bounded mainly by a one-time build cost rather
-than per-trial cost (fidelity_driven_injection), rather than by
-redundant re-simulation. Retrying the 12+ qubit sweep is now more
-plausible than before, though not yet attempted -- the statevector/MPS
-wall above n~13-14 remains the next thing to solve if that's revisited.
-
-Real-run validation (2026-08-26), via run_experiment.py rather than
-isolated function calls: qaoa_maxcut at n=12/n=13, tiny GA settings
-(generations=3, pop_size=8) to isolate injection-stage cost from
-block-optimization cost.
-- n=12, injection_method=sa: 83s total (partition 0.4s, block-opt 9.0s,
-  injection 73.3s, compression 0.4s).
-- n=13, injection_method=sa (--injection-fidelity-exact-threshold 13
-  override needed -- default 12 would otherwise route n=13 through the
-  untouched approximate SWAP-test path instead of the fixed exact
-  path): 500s total (injection 272.0s, rest same order as n=12).
-Both previously did not complete within a 15-minute bound at these
-settings. The injection stage still dominates and grows with n because
-the pipeline's own standalone reporting-level fidelity calls
-(fid_rebuilt, fid_rebuilt1, fid_inj, fid_i, fid_final -- five single
-dense-Operator calls per run, untouched by either fix) still pay the
-full O(4^n)-ish cost per call.
-
-While validating this, discovered stochastic_injection (the pipeline's
-DEFAULT injection_method) was NOT actually fixed by the work above --
-it was deliberately left alone earlier over concern that its
-compress_custom step isn't exactly unitary-preserving. A real n=12 run
-with the default method got stuck for 6+ minutes inside it (its
-default n_injections=100 trials each pay the full ~25s/call exact-
-fidelity cost = ~42 minutes) before being killed -- confirms it was a
-live, not just theoretical, blocker.
-
-=====================================================================
-STOCHASTIC_INJECTION FAST PATH FOUND AND FIXED (2026-08-26)
-=====================================================================
-Root cause is a simpler variant of the sa_injection algebra:
-stochastic_injection's candidate is always qc plus exactly one
-appended gate (before its compress_custom/qiskit_opt_pass step), so
-Fidelity(cand, qc) = |Tr(G_embedded)| / 2^n reduces all the way to
-|Tr(G_local)| / 4 -- a constant depending ONLY on the gate type/angle
-(cx/cz -> 0.5 always; rzz(theta) -> |cos(theta/2)|), with NO dependence
-on qc, blocks, or n whatsoever. Unlike the sa_injection/
-fidelity_driven_injection fixes, this needed no partial trace or
-cached-operator machinery at all -- just the existing _local_gate_matrix
-helper and a trace.
-
-Checked whether compress_custom (applied to the OLD code's candidate
-before the fidelity check) could change this: cancel_inverse_gates only
-handles {x, y, z, h, cx} (not cz/rzz) and requires an exact adjacent
-duplicate; merge_rotations and remove_negligible_rotations only touch
-single-qubit rx/ry/rz (never cx/cz/rzz, the only gate types this
-function ever injects). So compression can only matter through a
-secondary effect on some OTHER pre-existing rotation elsewhere in qc.
-Verified empirically rather than trusting this reasoning alone: 500
-trials on a real qaoa_maxcut(n=9) circuit, comparing the old
-compress-then-check order against the new closed-form-only-check --
-0/500 mismatches, identical accept counts (7/500 both).
-
-Implemented in M1_finale/final_m1_script.py: stochastic_injection now
-computes fid via the closed form BEFORE building or compressing any
-candidate circuit; only accepted trials (rare) pay the cost of
-building+compressing the actual kept circuit. fidelity_exact_threshold/
-fidelity_samples/fidelity_shots stay in the function's signature
-(unused internally now) since the pipeline call site passes them via a
-dict shared with sa_injection, which still needs them for its own
-fallback branch -- not worth special-casing the shared call site for.
-
-Verified:
-- n=9, n_injections=50: kept list byte-identical to pre-fix
-  (both empty in this test); 9.22s -> 0.01s (~920x).
-- n=12/13/16/20, n_injections=100 (real default): all ~0.01-0.02s --
-  confirms this fix has NO qubit-count ceiling at all (unlike the other
-  two fixes, whose remaining cost still depends on n through the
-  reporting-level calls) since the closed form never touches an n-sized
-  matrix.
-- Full pytest smoke suite (11 tests): all pass, no behavior change.
-- Real pipeline run, n=12, DEFAULT injection_method=stochastic (the
-  exact configuration that hung 6+ minutes above): 121.3s total
-  (partition 0.4s, block-opt 9.1s, injection 55.6s, compression 0.5s)
-  -- injection stage now cheaper than the sa-method run's 73.3s, since
-  stochastic_injection's own cost is now negligible, leaving only the
-  reporting calls and fidelity_driven_injection.
-
-All three injection-stage redundant-simulation bottlenecks identified
-during this scaling investigation are now fixed. What remains before
-pushing past n~13-14 is the separate, deeper problem: the pipeline's
-five standalone reporting-level fidelity calls and the exact-vs-
-approximate backend wall for genuinely entangled circuits (see the
-sa_injection fix's context above) -- neither touched by any of these
-three fixes.
-
-=====================================================================
-PILOT SWEEP AT n=12/13 AND run_sweep.py UPDATES (2026-08-26)
-=====================================================================
-With all three injection fixes in place, ran real pilot sweeps via
-run_sweep.py (not isolated function calls) to check whether the
-benchmark suite is actually practical past 8 qubits now.
-
-n=12, all 5 circuit families, 1 seed each, real production GA settings
-(generations=100, pop_size=100), injection_method=stochastic: 4/5 ran
-(qaoa_maxcut already had a result from the direct validation above),
-0 failures.
-  w_state               77.5s   fidelity_final=0.042
-  hw_efficient_ansatz   94.1s   fidelity_final=0.036
-  qaoa_maxcut          125.1s   fidelity_final=0.00009
-  weak_random          168.2s   fidelity_final=0.349
-  qft                  238.9s   fidelity_final=0.008
-Average ~141s/run. First real confirmation that block_optimization's
-cost at PRODUCTION settings (100 gens x 100 pop, not the tiny
-generations=3/pop_size=8 used for the earlier isolated-fix validation)
-stays cheap at n=12 -- all 3 blocks' full 100-generation runs finished
-in ~60-70s total, confirming block-level fitness evaluation cost
-really is a function of per-block (not total-circuit) qubit count, as
-suspected but not previously measured at real settings. Results folded
-into runs/results_master.csv (265 rows). Noted in passing: some older
-weak_random_12q rows already present in runs/ from the paused
-2026-08-19/24 large-qubit scaling attempt (pre-dating all three fixes,
-wall_clock_s up to 2342s) -- left alone as historical, unrelated to
-this pilot.
-
-n=13 needed a run_sweep.py change first: it has no CLI flag to
-override --injection-fidelity-exact-threshold (default 12), so a
-13-qubit run would silently route fidelity_driven_injection (which
-always runs regardless of --injection-methods) through the untouched,
-slow/approximate SWAP-test path instead of the fixed exact one.
-Added --fidelity-exact-threshold and --injection-fidelity-exact-
-threshold CLI flags to run_sweep.py, passed through to
-run_experiment.py's existing flags of the same name. Both default to
-None (meaning: don't override, let run_experiment.py use its own
-default) and are only appended to run_id_for's output when explicitly
-set, so every existing run_id in the current 265-row dataset is
-unaffected -- verified via dry-run diff before and after the change.
-
-Also removed run_sweep.py's LARGE_N_THRESHOLD=10 logic, which
-previously dropped "sa" from the grid above 10 qubits. That exclusion
-was based on a pre-fix measurement (sa_injection ~21.6 min vs
-stochastic's ~9.1 min at n=12); the 2026-08-26 sa_injection fix makes
-its energy check an unconditional exact closed-form computation at any
-n (not gated by any threshold), so the premise no longer holds --
-verified sa_injection is not slower than stochastic post-fix (see the
-sa_injection fix entry above). Removing this makes --injection-methods
-sa usable above n=10 again, needed for the flag test below.
-
-Verified end-to-end with the new flag: `python run_sweep.py --circuits
-qaoa_maxcut --n-qubits 13 --injection-methods sa --n-seeds 1
---injection-fidelity-exact-threshold 13` -> run_id
-qaoa_maxcut_13q_sa_..._ifet13, completed in 495.6s (matches the
-495-500s range from the earlier direct n=13 validation almost exactly,
-confirming the flag actually reaches the pipeline's fidelity backend
-selection correctly). Full pytest smoke suite (11 tests) still passes.
-
-Full n=12 grid — RUN (2026-08-26): `python run_sweep.py --n-qubits 12
---injection-methods stochastic --n-seeds 5` -> 20 run, 5 skipped
-(already done by the pilot above), 0 failed (of 25 total). Folded into
-runs/results_master.csv (285 rows total). Per-circuit means over 5
-seeds each:
-
-  circuit               mean_wall_clock_s  mean_fidelity_final  mean_depth_after  mean_cost_after
-  w_state                       80.4               0.075              14.2            103.0
-  hw_efficient_ansatz           94.0               0.036              15.6            101.4
-  qaoa_maxcut                  125.3               0.055              12.4             66.4
-  weak_random                  181.1               0.387              11.2            106.4
-  qft                          241.8               0.017              35.6            211.2
-
-Overall mean 144.5s/run (matches the pilot's ~141s estimate closely).
-qft is consistently the slowest and lowest-fidelity family (matches
-its known high entanglement); weak_random is the fastest/highest-
-fidelity, consistent with the low-connectivity design intent. Not yet
-compared against the existing 8-qubit dataset's per-circuit numbers or
-run for n=13 at full seed count -- both natural next steps if scaling
-work continues, otherwise this dataset stands as confirmation that the
-12-qubit tier is now practical end-to-end at the current fidelity
-regime.
+Not done / open:
+- injection_fidelity_exact_threshold (12, kept below fidelity_exact_
+  threshold's 13 specifically to dodge the old slow SWAP test) has not
+  been re-benchmarked against the new echo-test backend and may be
+  raisable.
+- No incremental-MPS-state fast path for fidelity_driven_injection's
+  per-trial loop above that threshold (the natural mirror of the exact
+  tier's partial-trace trick, adapted to MPS tensors) — would need
+  direct manipulation of Aer's internal MPS representation. This is
+  the clearest remaining lever for pushing qaoa_maxcut itself past
+  n~16-18; the other 4 families don't need it.
+- louvain_partition has no seed/random_state of its own — reproducible
+  only because run_experiment.py seeds Python's global random/np.random
+  before calling the pipeline. Fine for real experiments; would bite
+  anyone calling the pipeline directly without replicating that.
+- Classical-shadow/tensor-network fidelity estimation (arXiv 2209.02093,
+  item 3 in "NEXT STEPS — IMPROVEMENTS FROM RELATED WORK") remains the
+  more fundamental answer if qaoa_maxcut's own wall needs lifting
+  further than trial/sample-count tuning can reach.
 
 =====================================================================
 RESEARCH ANGLE CHOSEN AND IMPLEMENTED: SMS-EMOA + operator/hybrid
 ablations (2026-08-25)
 =====================================================================
-Closed the biggest open blocker from Phase 2 above (no research-
-contribution angle chosen). Picked, over a noise/crosstalk-aware
-objective: **SMS-EMOA as a new per-block optimizer, compared against
-NSGA-II (and now-verified NSGA-III), plus two supporting ablations** --
-mutation operator combinations (GECCO 2025, arXiv 2504.06413) and a
-formalized "pure GA vs. hybrid GA+LAS" comparison (GECCO 2025
-companion, arXiv 2504.17561). Chosen specifically because it reuses
-existing, already-tested code (compute_hv, the injection stage's
-pluggable-strategy pattern) and needs no new dependencies or device-
-noise modeling -- lower risk for the laptop-only, ~3.5-month remaining
-budget, especially after the scaling work above already lost several
-days to unresolved performance walls.
+Closed Phase 2's biggest open blocker (no research-contribution angle).
+Picked, over a noise/crosstalk-aware objective: SMS-EMOA as a new
+per-block optimizer compared against NSGA-II, plus two supporting
+ablations — mutation-operator combinations (GECCO 2025, arXiv
+2504.06413) and a formalized pure-GA-vs-hybrid-GA+LAS comparison (GECCO
+2025 companion, arXiv 2504.17561). Chosen for reusing already-tested
+code (compute_hv, the injection stage's pluggable-strategy pattern) and
+needing no new dependencies or noise modeling.
 
-Implemented in M1_finale/final_m1_script.py:
-- Fixed a pre-existing bug in optimise_block_nsga2: its per-generation
-  loop computed and appended evaluate_run(fits_gen) twice per
-  generation (once without P_star, once with), silently doubling
-  history_moo's length -- would have broken a fair generation-indexed
-  comparison against the new algorithm below. Removed the redundant
-  call.
-- Added a mutation_scheme param ("point" default == unchanged prior
-  behavior, "swap_add", "swap_add_delete") to optimise_block_nsga2,
-  via new mut_swap/mut_addition/mut_deletion operators. Chromosomes
-  become variable-length under swap_add/swap_add_delete; confirmed
-  nothing else assumes fixed length-12 individuals beyond the initial
-  population seeding, and DEAP's cxTwoPoint handles unequal-length
-  parents safely.
-- Added a hybrid_las param (default False) to optimise_block_nsga2:
-  when True, runs the LAS local angle search (update_rotation_angles --
-  previously dead code, zero call sites anywhere in the file) on the
-  GA's winning chromosome before building the final circuit, recording
-  las_applied/fidelity_before_las/fidelity_after_las per block.
-- New optimise_block_smsemoa function, same chromosome
-  encoding/objectives/DEAP creator-guard pattern as optimise_block_nsga2
-  (confirmed safe to reuse creator.FitnessMulti/Individual directly --
-  same 3 objectives, same maximize/minimize weights). Parent selection
-  is binary tournament by Pareto rank (rank via tools.sortNondominated,
-  id()-keyed per generation) instead of NSGA-II's crowding-distance
-  tournament. Environmental selection stacks whole Pareto fronts while
-  they fit pop_size, then for the boundary front iteratively removes
-  the individual whose removal loses the LEAST hypervolume (via the
-  existing compute_hv/normalize_objectives, same minimize-conversion
-  evaluate_run already uses) until back to pop_size -- hand-rolled
-  inside the existing DEAP loop rather than pymoo's own SMSEMOA
-  algorithm class, to keep one GA framework in the codebase (deliberate
-  choice, confirmed with the user; accepted some performance risk in
-  exchange). This is a generational adaptation of SMS-EMOA (batches
-  offspring per generation, matching evaluate_population's joblib
-  parallelism) rather than the textbook's steady-state (mu+1) loop.
-  Supports the same mutation_scheme/hybrid_las params.
-- optimise_circuit_pipeline gained block_algorithm ("nsga2"/"smsemoa"),
-  mutation_scheme, and hybrid_las params, dispatched at the per-block
-  call site exactly mirroring the existing injection_method if/elif/
-  else pattern. All three are echoed into the returned meta dict
-  (analogous to injection_path_used) so metrics.json is self-
-  describing.
-- Wired through run_experiment.py (--block-algorithm/--mutation-scheme/
-  --hybrid-las CLI flags), run_sweep.py (new BLOCK_ALGORITHMS/
-  MUTATION_SCHEMES/HYBRID_LAS_OPTIONS axes, defaulting to single-value
-  lists so a plain `python run_sweep.py` run is unchanged; run_id_for
-  extended to encode all three, avoiding stale-run collisions), and
-  aggregate_results.py (3 new CONFIG_FIELDS columns, plus
-  n_blocks_hybrid_las_applied/mean_fidelity_before_las/
-  mean_fidelity_after_las aggregated from the per-block LAS records).
-- tests/test_pipeline_smoke.py: added a 5-case parametrized test
-  (smsemoa, each mutation_scheme, hybrid_las, and one combined case).
-  Full suite (11 tests) passes.
-- Verified end-to-end: a manual run_experiment.py run with
-  --block-algorithm smsemoa --mutation-scheme swap_add_delete
-  --hybrid-las produced a valid metrics.json with all new fields
-  populated (hybrid_las improved fidelity in 3/4 blocks); a second
-  nsga2 baseline run plus aggregate_results.py confirmed the 3 new CSV
-  columns and LAS aggregates populate correctly.
-- Performance check (the risk flagged for hand-rolling instead of using
-  pymoo's SMSEMOA): timed optimise_block_nsga2 vs optimise_block_smsemoa
-  on the same 6-qubit two-cluster test circuit at the sweep's real
-  generations=100/pop_size=100 settings -- NSGA-II 10.7s, SMS-EMOA 8.2s.
-  No performance blocker at this scale; the boundary-front
-  hypervolume-trim cost did not materialize as a problem.
+Implemented in M1_finale/final_m1_script.py: new optimise_block_smsemoa
+(binary tournament by Pareto rank; environmental selection stacks whole
+fronts then trims the boundary front by least-hypervolume-loss, hand-
+rolled in the existing DEAP loop rather than pymoo's SMSEMOA class, by
+deliberate choice); mutation_scheme param ("point" / "swap_add" /
+"swap_add_delete", via new mut_swap/mut_addition/mut_deletion operators,
+chromosomes become variable-length under the swap schemes); hybrid_las
+param (runs the previously-dead-code LAS local search on the GA's
+winner). Both wired through optimise_circuit_pipeline, run_experiment.py,
+run_sweep.py, and aggregate_results.py. Fixed a pre-existing bug found
+along the way: optimise_block_nsga2 was double-appending to history_moo
+every generation. Performance check: SMS-EMOA's hypervolume-trim wasn't
+a wall-clock blocker (8.2s vs. NSGA-II's 10.7s on a same-size test).
 
-Recommended experiment design (not a full factorial grid -- 600+ runs
-across block_algorithm x mutation_scheme x hybrid_las x injection_method
-x 5 circuits x 5 seeds would be too large for the remaining laptop-only
-budget). Three staged, single-axis sweeps instead, each via run_sweep.py
-with one override flag, fixing injection_method=stochastic throughout
-(already shown to dominate in the existing 8q dataset):
-  (a) Algorithm comparison: nsga2 vs smsemoa, mutation_scheme=point,
-      hybrid_las=False -> 2 x 5 circuits x 5 seeds = 50 runs.
-  (b) Mutation ablation: fix block_algorithm to (a)'s winner, vary
-      mutation_scheme -> 3 x 5 x 5 = 75 runs.
-  (c) Hybrid LAS ablation: fix block_algorithm/mutation_scheme to the
-      prior winners, vary hybrid_las -> 2 x 5 x 5 = 50 runs.
-Total ~175 runs vs. 600+ for a full factorial.
+Ran 3 staged single-axis sweeps (not a 600+-run full factorial) on the
+8-qubit x 5-circuit x 5-seed benchmark set, injection_method=stochastic
+throughout, ~175 runs total:
 
-Sweep (a) — algorithm comparison — RUN (2026-08-25): 50/50 runs
-succeeded (`python run_sweep.py --injection-methods stochastic
---block-algorithms nsga2 smsemoa`), aggregated into
-runs/results_master.csv (now 110 rows total alongside the pre-existing
-61-run 8q baseline). Mean over all 5 circuits x 5 seeds:
+(a) nsga2 vs smsemoa (mutation_scheme=point, hybrid_las=False):
+  block_algorithm  fidelity_final  depth_after  cost_after  mean_hv  total_n_pareto  wall_clock_s
+  nsga2                    0.1491        16.04       82.12   0.0520          121.84       52.41
+  smsemoa                  0.1230        15.20       78.24   0.0596          171.72       50.95
+  NSGA-II wins peak fidelity in every circuit family (16/25 vs 9/25
+  seed-runs); SMS-EMOA gives a larger, more diverse Pareto front at
+  no wall-clock cost. Report both as complementary, not a strict winner.
 
-  block_algorithm  fidelity_final  depth_after  cost_after  mean_hv  mean_spread  mean_spacing  total_n_pareto  wall_clock_s
-  nsga2                    0.1491        16.04       82.12   0.0520       1.4360        0.0805          121.84       52.41
-  smsemoa                  0.1230        15.20       78.24   0.0596       1.6326        0.0870          171.72       50.95
+(b) mutation ablation, under nsga2: point 0.1491 > swap_add_delete
+  0.1293 > swap_add 0.1140 (fidelity_final) — point mutation remains the
+  best default; swap_add_delete beats swap_add on both fidelity and
+  depth/cost, matching the GECCO 2025 source's claim about deletion
+  balancing bloat. Under smsemoa instead: swap_add_delete 0.1420 >
+  swap_add 0.1295 > point 0.1230 — the OPPOSITE ranking. Genuine
+  algorithm x mutation-operator interaction, not noise (consistent
+  across both runs' depth/cost too) — the "best" mutation operator is
+  not universal, it depends on the pairing algorithm. (Caveat: swap_add's
+  outlier mean_hv in both runs is a per-run-normalization/bloat artifact,
+  not a real front-quality win — cost_after is highest for that scheme
+  both times.)
 
-NSGA-II wins on final (best-individual) fidelity in every circuit
-family, 16/25 seed-runs overall vs. smsemoa's 9/25 (per-circuit: 3-4
-wins out of 5 seeds each, no ties) -- a consistent, not noisy, result.
-But SMS-EMOA produces a larger, more diverse Pareto front per run
-(total_n_pareto 172 vs 122; mean_hv 0.060 vs 0.052) and slightly lower
-depth/cost, at essentially the same wall-clock cost (51s vs 52s mean --
-the earlier single-block timing check's finding, that the hand-rolled
-hypervolume trim isn't a performance blocker, holds at the full
-5-circuit/8-qubit scale too).
+(c) hybrid GA+LAS ablation: under nsga2, effect on fidelity_final is a
+  wash (16/25 improved, mean delta -0.00075) despite hybrid_las reliably
+  improving per-block fidelity (+0.9% relative) — the gain doesn't
+  survive into the final circuit because fidelity_driven_injection's
+  greedy pass dominates the final number regardless of pre-injection
+  block quality (a paper-worthy negative result, not a bug). Under
+  smsemoa instead: small but consistently positive (18/25 improved, mean
+  delta +0.00186) — hybrid LAS pairs better with smsemoa in this dataset.
 
-Interpretation: at this problem's current fidelity regime (raw
-fidelities well below the 0.9999 threshold, same regime Phase 2 already
-noted for the injection-method finding), SMS-EMOA's hypervolume-driven
-selection trades some peak fidelity for front diversity/coverage --
-consistent with the general MOO literature (SMS-EMOA optimizes the set
-as a whole via the hypervolume indicator, not the single best point on
-one objective). This is itself a legitimate, citable comparison result
-("hypervolume-driven selection improves front diversity/hv at a modest
-cost to peak fidelity, no wall-clock cost") rather than a clear win for
-either algorithm -- worth keeping both in the paper as complementary,
-not picking one as "the" method going into sweeps (b)/(c).
-
-Sweep (b) — mutation-scheme ablation — RUN (2026-08-25): 50/50 new runs
-succeeded (`python run_sweep.py --injection-methods stochastic
---block-algorithms nsga2 --mutation-schemes point swap_add
-swap_add_delete`; 25 of the 75-config grid were already done from
-sweep (a)'s point/nsga2 baseline and skipped). Aggregated into
-runs/results_master.csv (160 rows total). Mean over all 5 circuits x 5
-seeds, block_algorithm=nsga2, hybrid_las=False:
-
-  mutation_scheme   fidelity_final  depth_after  cost_after  mean_hv  mean_spread  mean_spacing  total_n_pareto  wall_clock_s
-  point                     0.1491        16.04       82.12   0.0520       1.4360        0.0805          121.84       52.41
-  swap_add                  0.1140        16.96       89.64   0.4659       1.0170        0.0837           94.96       56.19
-  swap_add_delete           0.1293        15.24       80.52   0.0438       1.4281        0.1004          100.36       53.44
-
-Win counts on fidelity_final (25 circuit x seed combos, argmax across
-the 3 schemes): point 12, swap_add 8, swap_add_delete 5.
-
-Findings, checked against the GECCO 2025 source (arXiv 2504.06413)
-this ablation was designed to test:
-- swap_add_delete beats swap_add on BOTH fidelity (0.1293 vs 0.1140)
-  and depth/cost (15.24/80.52 vs 16.96/89.64) here -- consistent with
-  the paper's claim that adding deletion gives "a better fidelity/depth
-  balance" than swap+addition alone (addition-without-deletion lets
-  chromosomes grow unchecked; cost_after 89.64 is the highest of the
-  three, confirming that bloat).
-- Neither swap-based scheme beats the original point-mutation operator
-  on this codebase's problem/representation -- point has the best mean
-  fidelity AND best win count of all three. The paper's comparison was
-  between the two swap-based variants only, not against a plain
-  single-gene-replace baseline, so this isn't a contradiction of it,
-  but it does mean the practical takeaway for this pipeline is "keep
-  point mutation as the default," with the swap-based schemes reported
-  as an ablation showing the addition/deletion trade-off rather than as
-  an improvement to adopt.
-- Caveat on mean_hv: swap_add's 0.4659 vs the other two schemes' ~0.05
-  is NOT a straightforwardly comparable "8x better front quality" --
-  compute_hv/evaluate_run normalize each run's own population to its
-  own per-run min/max before computing hypervolume, so a scheme whose
-  chromosomes bloat more (swap_add's cost_after is the highest here)
-  stretches its own objective ranges and can inflate the normalized HV
-  number without the front being more genuinely useful. Flagging this
-  now so it isn't mistakenly reported as a clean win in the paper --
-  any cross-scheme HV comparison would need a shared (not per-run)
-  normalization/reference point to be trustworthy.
-
-Sweep (c) — hybrid GA+LAS ablation — RUN (2026-08-25): 25/25 new runs
-succeeded (`python run_sweep.py --injection-methods stochastic
---block-algorithms nsga2 --mutation-schemes point --hybrid-las-options
-0 1`; the other 25 of the 50-config grid, hybrid_las=False, were
-already done). Aggregated into runs/results_master.csv (185 rows
-total). Mean over all 5 circuits x 5 seeds, block_algorithm=nsga2,
-mutation_scheme=point:
-
-  hybrid_las  fidelity_final  depth_after  cost_after  wall_clock_s  mean_fidelity_before_las  mean_fidelity_after_las
-  False               0.1491        16.04       82.12       52.41                         --                       --
-  True                0.1484        16.04       82.32       51.72                     0.6415                   0.6471
-
-Per-run comparison (paired by circuit+seed): 16/25 improved final
-fidelity, 9/25 worsened it, mean delta -0.00075, median delta +0.00071
--- essentially a wash, not a clear win either direction.
-
-Finding: hybrid_las DOES nudge per-block fidelity up on average
-(0.6415 -> 0.6471, ~+0.9% relative, applied to ~2.88 blocks/run on
-average -- matches n_blocks per run) -- so update_rotation_angles
-(LAS) works as intended at the block level. But this per-block gain
-does NOT propagate to the final circuit's fidelity_final in any
-consistent direction. Root cause, tying back to the Phase 2 injection-
-path finding above: fidelity_driven_injection (the always-run greedy
-pass) wins 48/50 baseline runs and its own optimization dominates the
-final fidelity number regardless of how good the pre-injection block
-circuits were -- so a modest, block-local LAS improvement gets
-overwritten by whichever injection-stage gates end up added. This is
-itself a useful negative result for the paper ("hybrid GA+LAS improves
-intra-block optimization quality in isolation, but its effect is
-masked by the injection stage at this fidelity regime") rather than a
-failure of the LAS implementation -- worth stating explicitly rather
-than omitting a null result.
-
-=== Summary across sweeps (a)/(b)/(c): 125 total new + reused runs ===
-- (a) NSGA-II beats SMS-EMOA on peak fidelity but SMS-EMOA gives a
-  larger/more-diverse Pareto front at no wall-clock cost -- report both
-  as complementary, not a strict winner.
-- (b) point mutation remains the best default; swap_add_delete beats
-  swap_add (matching the GECCO 2025 source), demonstrating the
-  addition/deletion balance point without beating the baseline.
-- (c) hybrid GA+LAS measurably improves block-local fidelity but that
-  gain doesn't survive into final circuit fidelity at this problem's
-  regime, because the injection stage's greedy pass dominates the
-  final number -- a paper-worthy negative result, not a bug.
-- Common thread: block-optimization-stage choices (algorithm, mutation,
-  hybrid LAS) have SECONDARY effects on final circuit fidelity compared
-  to the injection stage's own greedy optimization, at the current
-  8-qubit / sub-0.9999-fidelity regime. Worth stating as a paper
-  finding in its own right, and worth considering whether the paper's
-  headline comparison should be reported on a block-optimization-stage
-  metric (e.g. per-block fidelity/HV, already in moo_metrics_per_block)
-  rather than only on end-to-end fidelity_final, so these real
-  algorithm/operator differences aren't washed out by the downstream
-  stage.
-
-Sweeps (b)/(c) for smsemoa — RUN (2026-08-25): re-ran both ablations
-with block_algorithm=smsemoa (`--block-algorithms smsemoa
---mutation-schemes point swap_add swap_add_delete`, then
-`--block-algorithms smsemoa --mutation-schemes point
---hybrid-las-options 0 1`). 75 new runs (50 + 25), 0 failed. Aggregated
-into runs/results_master.csv (260 rows total).
-
-Mutation ablation (smsemoa, hybrid_las=False), mean over 5 circuits x 5
-seeds:
-
-  mutation_scheme   fidelity_final  depth_after  cost_after  mean_hv  total_n_pareto  wall_clock_s
-  point                     0.1230        15.20       78.24   0.0596          171.72       50.95
-  swap_add                  0.1295        17.16       89.64   0.6801          185.12       56.28
-  swap_add_delete           0.1420        14.84       78.60   0.0562          151.92       51.87
-
-Win counts (25 combos): point 9, swap_add_delete 9, swap_add 7.
-
-Finding -- notably DIFFERENT from the nsga2 result above: under
-smsemoa, swap_add_delete is the best mutation scheme (highest mean
-fidelity 0.1420 vs point's 0.1230, tied with point on win count, and
-comparable depth/cost), whereas under nsga2 plain point mutation was
-clearly the best on every metric. This is a genuine algorithm x
-mutation-operator interaction, not just noise (the fidelity gap and
-consistent win-tie are the same direction across both cost/depth
-metrics) -- worth reporting as its own finding: the "best" mutation
-operator is not universal, it depends on which selection algorithm it's
-paired with. (The swap_add mean_hv=0.68 outlier is the same per-run
-normalization/bloat artifact flagged under the nsga2 ablation --
-cost_after=89.64 is again the highest of the three, so treat that HV
-number with the same caveat, not as a real front-quality win.)
-
-Hybrid LAS ablation (smsemoa, mutation_scheme=point), mean over 5
-circuits x 5 seeds:
-
-  hybrid_las  fidelity_final  depth_after  cost_after  mean_hv  wall_clock_s  mean_fidelity_before_las  mean_fidelity_after_las
-  False               0.1230       15.20       78.24   0.0596         50.95                        --                       --
-  True                0.1249       15.00       77.80   0.0596         51.66                    0.6190                   0.6247
-
-Per-run: 18/25 improved, 7/25 worsened, mean delta +0.00186, median
-+0.00090 -- both positive, unlike the nsga2 case where the net effect
-was roughly a wash (mean delta -0.00075). Under smsemoa, hybrid_las
-gives a small but more CONSISTENT positive effect (also slightly better
-depth/cost: 15.00/77.80 vs 15.20/78.24). Still a modest effect size on
-only 25 seed-circuit combos -- worth reporting as "hybrid GA+LAS pairs
-better with smsemoa than with nsga2 in this dataset," not overclaimed
-as a large or definitive difference without more seeds.
-
-Combined with sweep (a): the two algorithms now each have a
-best-paired mutation scheme (nsga2 -> point, smsemoa -> swap_add_delete)
-and a hybrid_las effect that differs in direction/consistency (wash for
-nsga2, small consistent gain for smsemoa) -- all four combinations
-(2 algorithms x 2 relevant axes) are now in runs/results_master.csv for
-the paper's comparison tables. Not yet done: no cross-checking whether
-nsga2 also improves under swap_add_delete + hybrid_las combined (each
-axis was ablated independently, per the plan's "single axis at a time"
-design) -- a combined best-of-both-axes run per algorithm would be a
-natural next step if there's time.
-
-Phase 3 — paper writing (November-December) — NOT STARTED
-  - Generate all figures/tables directly from the Phase 1 master
-    results table via script, not hand-tweaked per notebook --
-    reproducible, and easy to regenerate if a reviewer asks for a
-    variant.
+Common thread across (a)/(b)/(c): block-optimization-stage choices have
+SECONDARY effects on end-to-end fidelity_final compared to the injection
+stage's own greedy pass, at this 8-qubit/sub-0.9999-fidelity regime —
+worth reporting as a finding in itself, and worth considering reporting
+the paper's headline comparison on a block-optimization-stage metric
+(per-block fidelity/HV, already in moo_metrics_per_block) rather than
+only end-to-end fidelity_final. All ~260 rows from these sweeps are in
+runs/results_master.csv. Not done: no combined best-of-both-axes run
+per algorithm (each axis was ablated independently by design).
 
 =====================================================================
 FRAMEWORK/DEPENDENCY AUDIT (2026-08-18)
 =====================================================================
-Checked the working .venv against PyPI. All 14 direct dependencies
-were current or one patch behind (qiskit 2.5.1 -> 2.5.2 available;
-everything else already latest). No urgent version bumps needed.
-
-Two compatibility issues found and fixed instead:
-1. M1_finale/final_m1_script.py used Qiskit's deprecated
-   CircuitInstruction 3-tuple unpacking (`for inst, qargs, cargs in
-   qc.data:` and `g, q, _ = c.data[i]`-style indexing) in 13 places.
-   Qiskit's own warning: "deprecated legacy behavior since Qiskit 1.2,
-   and will be removed in Qiskit 3.0". Not broken today, but a routine
-   `pip install --upgrade` during the Aug-Dec experiment window could
-   have landed Qiskit 3.0 and silently broken the whole pipeline
-   mid-run. Fixed all 13 sites to use .operation/.qubits/.clbits
-   attribute access instead. Verified with the Phase 0 smoke test run
-   under -W error::DeprecationWarning (passes clean) and a full CLI
-   run with a fixed seed producing byte-identical metrics to the
-   pre-fix run (fidelity/depth/cost unchanged) -- confirms pure
-   refactor, no behavior change.
-2. requirements.txt had zero version pins (just package names). Pinned
-   every entry to the exact version in the working, smoke-tested
-   .venv (numpy==2.5.1, qiskit==2.5.1, qiskit-aer==0.17.2,
-   matplotlib==3.11.1, joblib==1.5.3, scipy==1.18.0, networkx==3.6.1,
-   python-louvain==0.16, scikit-learn==1.9.0, ipykernel==7.3.0,
-   deap==1.4.4, pandas==3.0.5, pymoo==0.6.2, pytest==9.1.1) so
-   `pip install -r requirements.txt` reproduces the same environment
-   later, instead of resolving whatever is newest at install time.
-
-Minor, not acted on: qiskit-aer is in requirements.txt but the main
-pipeline never imports it -- only one throwaway experiment notebook
-(Final_test/nex_formula/test_formule.ipynb) uses it. Left alone since
-removing it wasn't asked for and that notebook may still matter.
+Checked the working .venv against PyPI: all 14 direct dependencies
+current or one patch behind, no urgent bumps needed. Fixed two
+compatibility issues: (1) M1_finale/final_m1_script.py used Qiskit's
+deprecated CircuitInstruction 3-tuple unpacking in 13 places (slated for
+removal in Qiskit 3.0) — replaced with .operation/.qubits/.clbits
+attribute access, verified byte-identical behavior; (2) requirements.txt
+had no version pins — pinned every entry to the working, smoke-tested
+.venv's exact versions. Minor, not acted on: qiskit-aer is listed but
+only used by one throwaway notebook (Final_test/nex_formula), not the
+main pipeline.
 
 =====================================================================
 FUTURE WORK — PARETO-DOMINANCE-BASED MOO ALGORITHMS (2026-08-27)
 =====================================================================
-Extends the research-objective candidate list ("NEXT STEPS — CANDIDATE
-MOO ALGORITHMS TO ADD" above, and "RESEARCH ANGLE CHOSEN AND
-IMPLEMENTED: SMS-EMOA" for what's actually built) with the rest of the
-Pareto-dominance-based family that NSGA-II/III and SPEA2/PESA-II
-belong to. Full detail and sources in the new moo.txt at the repo
-root; this entry records what it means for the project going forward.
-
-Lineage, in order (each a direct reaction to the previous entry's
-weakness):
-  VEGA (1985) -> MOGA (1993) -> NPGA (1993) -> SPEA (1999) ->
-  PAES (1999) -> PESA (2000) -> PESA-II (2001) -> SPEA2 (2001) ->
-  weak constraint-Pareto dominance (2025)
-
-Assessment against this project's actual needs:
-- VEGA, MOGA, NPGA, SPEA, PESA: historical only. Each is strictly
-  superseded by a later entry already covered (SPEA -> SPEA2,
-  PESA -> PESA-II) or by NSGA-II itself. No reuse value, not
-  candidates to implement -- useful only as the "why NSGA-II and not
-  an older Pareto method" lineage paragraph for the paper's related-
-  work section.
-- PAES (1999, plus a 2025 runtime-analysis successor "PAES-25"): the
-  one structurally different option in this group -- a (1+1)
-  evolution-strategy (single parent/child, no crossover, no
-  population) rather than a population-based GA. Doesn't fit the
-  existing optimise_block_nsga2/optimise_block_smsemoa pattern
-  (population-parallel, joblib-evaluated) without a different
-  execution model. Not prioritized given the ~3-month remaining
-  budget and the population-GA framework this project already commits
-  to, but worth naming in the paper as evidence the population-based
-  design was a real choice, not the only option.
-- Weak constraint-Pareto dominance (Nov 2025, MDPI Mathematics): a
-  constrained-MOO variant -- doesn't apply today since this project's
-  three objectives (fidelity, depth, cost) are all soft/maximized-or-
-  minimized, not hard feasibility constraints. Flagged as a revisit
-  candidate ONLY IF a future objective becomes a hard constraint
-  (e.g. "fidelity >= 0.999" as a pass/fail cutoff rather than a
-  continuously maximized objective) -- not actionable now.
-
-Net effect on the existing priority order (MOSA > SMS-EMOA [done] >
-IBEA > MOEA/D > SPEA2 > MOPSO, from "NEXT STEPS — CANDIDATE MOO
-ALGORITHMS TO ADD" above): unchanged. Nothing found in this extended
-search displaces MOSA/IBEA/MOEA/D as the next implementation
-candidates by cost/reuse tradeoff. The one concrete upgrade: if/when
-SPEA2 is implemented, cite the 2025 IJCAI "SPEA2 Beats NSGA-II"
-approximation-guarantee result (and its 2026 SPEA2+ follow-up) instead
-of only the original 2001 SPEA2 paper -- stronger, more current
-theoretical grounding for the same baseline comparison already planned.
-
-Not started: none of PAES/weak-constraint-Pareto-dominance are
-scheduled for implementation; this section is a research-landscape
-record for the paper's related-work framing, not a new item on the
-implementation backlog.
+Web research (full detail/sources in moo.txt) into the rest of the
+Pareto-dominance MOO lineage NSGA-II/III and SPEA2 belong to: VEGA
+(1985) -> MOGA -> NPGA -> SPEA -> PAES -> PESA -> PESA-II -> SPEA2
+(2001) -> weak constraint-Pareto dominance (2025). Assessment: VEGA
+through PESA are historical only (superseded by later entries already
+covered) — useful only for the paper's related-work lineage paragraph.
+PAES (a (1+1) evolution strategy, no population/crossover) is the one
+structurally different option, but doesn't fit this project's
+population-parallel/joblib execution model — not prioritized, but worth
+naming as evidence the population-GA design was a real choice. Weak
+constraint-Pareto dominance doesn't apply (this project's 3 objectives
+are all soft, not hard constraints) — revisit only if an objective ever
+becomes a hard pass/fail cutoff. Net effect: no change to the existing
+priority order (MOSA > SMS-EMOA [done] > IBEA > MOEA/D > SPEA2 > MOPSO).
+One concrete upgrade if/when SPEA2 is implemented: cite the 2025 IJCAI
+"SPEA2 Beats NSGA-II" result instead of only the 2001 paper.
