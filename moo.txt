@@ -1,0 +1,251 @@
+MOO ALGORITHM LANDSCAPE — WEB RESEARCH
+Generated: 2026-08-27
+Extended: 2026-08-27 (added the rest of the Pareto-dominance-based
+family: VEGA, MOGA, NPGA, SPEA, PAES, PESA, plus a 2025 weak-
+constraint-Pareto-dominance successor -- see section 1 and logs.txt's
+new "FUTURE WORK" entry)
+
+=====================================================================
+CONTEXT
+=====================================================================
+Web search for multi-objective optimization / MOEA algorithms beyond
+NSGA-II and NSGA-III, to cross-check and extend the candidate list
+already recorded in logs.txt ("NEXT STEPS — CANDIDATE MOO ALGORITHMS
+TO ADD" and "RESEARCH ANGLE CHOSEN AND IMPLEMENTED: SMS-EMOA").
+Independent research: this landscape survey landed on the same
+algorithm set as logs.txt's earlier candidate list (SMS-EMOA, IBEA,
+MOEA/D, SPEA2, MOSA, MOPSO), which was already implemented in part
+(SMS-EMOA, see logs.txt) -- confirms that list was well-scoped rather
+than missing anything major, with one addition worth flagging (SPEA2's
+2025/2026 approximation-guarantee results, see below).
+
+=====================================================================
+1. PARETO-DOMINANCE-BASED (same family as NSGA-II/III)
+=====================================================================
+Extended 2026-08-27 with a dedicated search for the rest of this
+family (historical lineage + any 2025/2026 successors), beyond the
+SPEA2/PESA-II pair already logged above. Listed roughly in
+chronological/lineage order, since each one is a direct reaction to
+the previous one's weakness -- useful for framing a "why NSGA-II"
+paragraph in the paper.
+
+- VEGA (Vector Evaluated Genetic Algorithm), 1985
+  The original: pioneered using an EA for multi-objective problems by
+  splitting the population into sub-groups, each selected on a single
+  objective. Suffered from poor diversity and biased ("speciated")
+  convergence toward single-objective extremes rather than a spread
+  Pareto front -- the problem every algorithm below was invented to
+  fix.
+  -> Historical baseline only; no reuse value for this project, not a
+     candidate to implement.
+
+- MOGA (Multi-Objective Genetic Algorithm), 1993
+  Introduced Pareto-rank-based fitness assignment plus fitness sharing
+  for diversity, replacing VEGA's per-objective sub-population split.
+  -> Historical; superseded by every later entry on this list.
+
+- NPGA (Niched Pareto Genetic Algorithm), Horn et al. 1993
+  Early diversity-preservation approach: Pareto-dominance tournament
+  selection combined with fitness sharing in a niche.
+  -> Historical; same role as MOGA above.
+
+- SPEA (Strength Pareto EA), 1999
+  Predecessor to SPEA2: strength-based fitness (an individual's
+  fitness derived from how many others it dominates) plus an external
+  archive of non-dominated solutions, but without SPEA2's k-th-nearest-
+  neighbor density estimator.
+  -> Superseded by SPEA2 (already logged above); listed here only for
+     lineage completeness.
+
+- PAES (Pareto Archived Evolution Strategy), 1999
+  Distinct design point from the GA-population-based algorithms above:
+  a (1+1) evolution strategy -- no crossover, a single parent/child
+  pair per iteration -- using dominance-relation-based local search and
+  an archive with adaptive grid-based diversity maintenance instead of
+  crowding/sharing.
+  A 2025 paper gives the first runtime analysis of "PAES-25", an
+  enhanced PAES variant, suggesting the algorithm is still an active
+  research subject, not purely historical.
+  -> Different mechanism (single-solution ES, not population GA) from
+     everything else in this project's candidate lists -- would need
+     its own chromosome-mutation/local-search framing rather than
+     slotting into the existing optimise_block_* pattern. Not
+     prioritized, but worth naming as evidence NSGA-II's population-
+     based approach was one design choice among several viable ones.
+
+- PESA (Pareto Envelope-based Selection Algorithm), 2000, and
+  PESA-II, 2001
+  PESA introduced the hyper-grid ("hyperbox") archive for diversity;
+  PESA-II is the same idea with selection performed at the hyperbox
+  level rather than the individual level (fewer, cheaper comparisons).
+  PESA-II was already logged above; PESA itself added here for
+  lineage completeness only.
+  -> Not prioritized (no reuse of existing project code, unlike
+     SMS-EMOA/MOSA).
+
+- SPEA2 (Strength Pareto EA 2), 2001 -- carried over from the prior
+  entry (unchanged from the first version of this file):
+  Fitness from a "strength" count (how many solutions each individual
+  dominates) plus a k-th-nearest-neighbor density estimator, with a
+  fixed-size external archive.
+  A 2025 theoretical paper (IJCAI 2025, "SPEA2 Beats NSGA-II") proved
+  SPEA2 achieves polynomial-time optimal Pareto-front approximation
+  guarantees, while NSGA-II's best proven guarantee is only ~2x.
+  A 2026 follow-up, SPEA2+, improves its density estimator with
+  provable runtime guarantees.
+  -> Already on logs.txt's candidate list (#4, SPEA2) as a baseline
+     comparison against NSGA-II's crowding distance; this search adds
+     a stronger, more current citation for it than a plain baseline
+     description would have had.
+
+- Weak Constraint-Pareto Dominance algorithm, Nov 2025 (MDPI
+  Mathematics)
+  A 2025-vintage successor in this lineage aimed at *constrained*
+  multi-objective problems: a "weak constraint-Pareto dominance"
+  relation that integrates feasibility with objective performance,
+  plus an angle-distance-based diversity maintenance strategy.
+  -> Not directly applicable today -- this project's per-block
+     objectives (fidelity, depth, cost) are unconstrained in the
+     formal sense (no hard feasibility region to violate), so the
+     "weak constraint" mechanism has nothing to attach to. Worth
+     revisiting only if a future objective becomes a hard constraint
+     rather than a soft objective (e.g. "fidelity >= 0.999" as a
+     feasibility cutoff instead of a maximized objective).
+
+=====================================================================
+2. INDICATOR-BASED
+=====================================================================
+- SMS-EMOA (S-Metric Selection EMOA)
+  Selection driven directly by hypervolume contribution; removes
+  whichever individual would shrink the front's hypervolume least.
+  High-quality, well-distributed fronts but computationally expensive
+  (hypervolume calculation scales badly with objective count).
+  -> Already implemented in this project (see logs.txt, "RESEARCH
+     ANGLE CHOSEN AND IMPLEMENTED", 2026-08-25); confirmed by this
+     search as one of the standard indicator-based choices, not a
+     niche pick.
+
+- IBEA (Indicator-Based EA)
+  Generalizes SMS-EMOA's idea to any binary quality indicator
+  (hypervolume, epsilon, etc.), not just hypervolume.
+  Comparative literature: IBEA wins hypervolume on 6/10 problems with
+  3+ objectives in one cited study -- often competitive with or better
+  than NSGA-II/MOEA/D on many-objective problems.
+  -> Already on logs.txt's candidate list (#2, reuses compute_epsilon).
+     Not yet implemented in this codebase.
+
+=====================================================================
+3. DECOMPOSITION-BASED
+=====================================================================
+- MOEA/D (Decomposition-based MOEA)
+  Splits the multi-objective problem into scalar subproblems via
+  weight vectors (Tchebycheff / weighted-sum / PBI), solved
+  cooperatively with neighborhood information sharing.
+  Widely available pre-built (e.g. in pymoo, already a project
+  dependency per requirements notes).
+  -> Already on logs.txt's candidate list (#3). Not yet implemented.
+
+- iMOACO_R
+  An ant-colony variant, compared against SMS-EMOA/MOEA/D/NSGA-III in
+  the literature; generally competitive on DTLZ benchmark problems.
+  -> New find, not previously listed. Different paradigm (ACO, not
+     GA) -- similar rationale/cost profile to MOPSO/MOACO below if
+     ever pursued as a "diversity of method" comparison point.
+
+=====================================================================
+4. OTHER METAHEURISTIC PARADIGMS (non-GA)
+=====================================================================
+- MOPSO (Multi-Objective Particle Swarm Optimization)
+  Swarm-based; needs an external archive + leader-selection strategy
+  for multi-objective use.
+  -> Already on logs.txt's candidate list (#6). Chromosome encoding
+     (gate_name, target_qubit, ctrl_qubit, angle) would need a
+     continuous-relaxation or discrete-PSO adaptation -- flagged in
+     logs.txt as the highest implementation cost of its list.
+
+- MOSA (Multi-Objective Simulated Annealing)
+  Pareto-dominance-based acceptance criterion + non-dominated archive,
+  extending single-objective SA.
+  -> Already on logs.txt's candidate list (#5, top-priority: extends
+     existing sa_injection/_sa_energy machinery directly). Not yet
+     implemented as a per-block optimizer.
+
+- MOACO (Multi-Objective Ant Colony Optimization)
+  Pheromone-based, often used for combinatorial/discrete problems.
+  -> New find, not previously listed. Same rationale as iMOACO_R
+     above -- lowest priority, no existing code to build on.
+
+=====================================================================
+5. RECENT DIRECTIONS (2025-2026)
+=====================================================================
+A newer survey ("From Pareto to Neural: A Mathematical Survey of
+Multi-Objective Optimization Algorithms", Mathematics 2026) proposes a
+five-level taxonomy -- Classical MOEA -> ML-Guided MOEA -> RL-Driven ->
+LLM-Driven -> Hybrid Neuro-Evolutionary -- surveying 120+ approaches,
+reflecting a shift toward learned/neural surrogate models and RL/LLM-
+guided search rather than purely evolutionary operators.
+This is a much bigger architectural leap than swapping selection
+operators (the SMS-EMOA-style additions already in the candidate
+list) -- not proposed as a near-term addition, just noted as context
+for where the field is moving past this project's current scope.
+
+=====================================================================
+TAKEAWAY / RELATION TO EXISTING CANDIDATE LIST
+=====================================================================
+This search independently converged on the same core candidate set
+already recorded in logs.txt's "NEXT STEPS — CANDIDATE MOO ALGORITHMS
+TO ADD" section (SMS-EMOA implemented; IBEA, MOEA/D, SPEA2, MOSA,
+MOPSO still open). No major algorithm was missing from that list.
+Two minor additions surfaced (PESA-II, iMOACO_R/MOACO) but neither has
+the same code-reuse advantage as MOSA (extends _sa_energy) or SMS-EMOA
+(reused compute_hv, already implemented) -- not re-prioritizing the
+existing suggested order (MOSA > SMS-EMOA [done] > IBEA > MOEA/D >
+SPEA2 > MOPSO) on the strength of this search alone.
+One citation upgrade worth keeping in mind for the paper: if SPEA2 is
+ever added as comparison #4 in the algorithm sweep, cite the 2025
+IJCAI "SPEA2 Beats NSGA-II" approximation-guarantee result (and the
+2026 SPEA2+ follow-up) rather than only the original 2001 SPEA2 paper
+-- it is a stronger, more current theoretical grounding than a plain
+baseline description would have had.
+
+=====================================================================
+SOURCES
+=====================================================================
+- Proven Approximation Guarantees in Multi-Objective Optimization:
+  SPEA2 Beats NSGA-II -- https://arxiv.org/html/2505.01323v1
+- SPEA2 Beats NSGA-II (IJCAI 2025) --
+  https://www.ijcai.org/proceedings/2025/0982.pdf
+- SPEA2+: Improved Density Estimation in SPEA2 with Provable Runtime
+  Guarantees -- https://arxiv.org/pdf/2606.12382
+- The First Theoretical Approximation Guarantees for NSGA-III --
+  https://arxiv.org/pdf/2504.21552
+- Runtime Analyses of NSGA-III on Many-Objective Problems --
+  https://arxiv.org/pdf/2404.11433
+- Comparison of iMOACO_R with respect to SMS-EMOA, MOEA/D, NSGA-III
+  and MOACO_R --
+  https://www.researchgate.net/figure/Comparison-of-iMOACO-R-with-respect-to-SMS-EMOA-MOEA-D-NSGA-III-and-MOACO-R-in-the-DTLZ_tbl1_307507646
+- From Pareto to Neural: A Mathematical Survey of Multi-Objective
+  Optimization Algorithms -- https://doi.org/10.3390/math14152694
+- Many-Objective Evolutionary Algorithms: A Survey (ACM Computing
+  Surveys) -- https://dl.acm.org/doi/10.1145/2792984
+- Multi-objective Evolutionary Algorithms (MOEAs) in PMEDM -- A
+  Comparative Study in Pareto Frontier --
+  https://arxiv.org/pdf/2509.01775
+- pymultiobjective (PyPI) -- https://pypi.org/project/pymultiobjective/
+
+Added 2026-08-27 (rest-of-Pareto-dominance-family search):
+- A Review of the Evolution of Multi-Objective Evolutionary
+  Algorithms (ScienceDirect) --
+  https://www.sciencedirect.com/org/science/article/pii/S1546221825009889
+- A tutorial on multiobjective optimization: fundamentals and
+  evolutionary methods (Springer, Natural Computing) --
+  https://link.springer.com/article/10.1007/s11047-018-9685-y
+- A Niched Pareto Genetic Algorithm for Multi-Objective Optimization
+  (NPGA, Horn et al.) --
+  https://www.researchgate.net/publication/3575291_A_Niched_Pareto_Genetic_Algorithm_for_Multi-Objective_Optimization
+- A Constrained Multi-Objective Evolutionary Algorithm with Weak
+  Constraint-Pareto Dominance and Angle Distance-Based Diversity
+  Preservation (MDPI Mathematics, Nov 2025) --
+  https://www.mdpi.com/2227-7390/13/22/3696
+- Weak Pareto Boundary: The Achilles' Heel of Evolutionary
+  Multi-Objective Optimization -- https://arxiv.org/pdf/2505.13854

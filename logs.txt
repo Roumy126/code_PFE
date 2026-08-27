@@ -1,6 +1,11 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-26 (fixed the second of the two scaling-stall
+Last updated: 2026-08-27 (web research into the MOO algorithm
+landscape, split across two files: moo.txt documents the search
+itself; a new "FUTURE WORK — PARETO-DOMINANCE-BASED MOO ALGORITHMS"
+section at the end of this file records what it means for the
+research objective -- see that section for details. Previously
+(2026-08-26): fixed the second of the two scaling-stall
 mechanisms too -- fidelity_driven_injection was rebuilding+resimulating
 a dense operator from scratch on every one of its up to 300 trials per
 run; replaced with a cached-operator partial-trace fast path, verified
@@ -1354,3 +1359,59 @@ Minor, not acted on: qiskit-aer is in requirements.txt but the main
 pipeline never imports it -- only one throwaway experiment notebook
 (Final_test/nex_formula/test_formule.ipynb) uses it. Left alone since
 removing it wasn't asked for and that notebook may still matter.
+
+=====================================================================
+FUTURE WORK — PARETO-DOMINANCE-BASED MOO ALGORITHMS (2026-08-27)
+=====================================================================
+Extends the research-objective candidate list ("NEXT STEPS — CANDIDATE
+MOO ALGORITHMS TO ADD" above, and "RESEARCH ANGLE CHOSEN AND
+IMPLEMENTED: SMS-EMOA" for what's actually built) with the rest of the
+Pareto-dominance-based family that NSGA-II/III and SPEA2/PESA-II
+belong to. Full detail and sources in the new moo.txt at the repo
+root; this entry records what it means for the project going forward.
+
+Lineage, in order (each a direct reaction to the previous entry's
+weakness):
+  VEGA (1985) -> MOGA (1993) -> NPGA (1993) -> SPEA (1999) ->
+  PAES (1999) -> PESA (2000) -> PESA-II (2001) -> SPEA2 (2001) ->
+  weak constraint-Pareto dominance (2025)
+
+Assessment against this project's actual needs:
+- VEGA, MOGA, NPGA, SPEA, PESA: historical only. Each is strictly
+  superseded by a later entry already covered (SPEA -> SPEA2,
+  PESA -> PESA-II) or by NSGA-II itself. No reuse value, not
+  candidates to implement -- useful only as the "why NSGA-II and not
+  an older Pareto method" lineage paragraph for the paper's related-
+  work section.
+- PAES (1999, plus a 2025 runtime-analysis successor "PAES-25"): the
+  one structurally different option in this group -- a (1+1)
+  evolution-strategy (single parent/child, no crossover, no
+  population) rather than a population-based GA. Doesn't fit the
+  existing optimise_block_nsga2/optimise_block_smsemoa pattern
+  (population-parallel, joblib-evaluated) without a different
+  execution model. Not prioritized given the ~3-month remaining
+  budget and the population-GA framework this project already commits
+  to, but worth naming in the paper as evidence the population-based
+  design was a real choice, not the only option.
+- Weak constraint-Pareto dominance (Nov 2025, MDPI Mathematics): a
+  constrained-MOO variant -- doesn't apply today since this project's
+  three objectives (fidelity, depth, cost) are all soft/maximized-or-
+  minimized, not hard feasibility constraints. Flagged as a revisit
+  candidate ONLY IF a future objective becomes a hard constraint
+  (e.g. "fidelity >= 0.999" as a pass/fail cutoff rather than a
+  continuously maximized objective) -- not actionable now.
+
+Net effect on the existing priority order (MOSA > SMS-EMOA [done] >
+IBEA > MOEA/D > SPEA2 > MOPSO, from "NEXT STEPS — CANDIDATE MOO
+ALGORITHMS TO ADD" above): unchanged. Nothing found in this extended
+search displaces MOSA/IBEA/MOEA/D as the next implementation
+candidates by cost/reuse tradeoff. The one concrete upgrade: if/when
+SPEA2 is implemented, cite the 2025 IJCAI "SPEA2 Beats NSGA-II"
+approximation-guarantee result (and its 2026 SPEA2+ follow-up) instead
+of only the original 2001 SPEA2 paper -- stronger, more current
+theoretical grounding for the same baseline comparison already planned.
+
+Not started: none of PAES/weak-constraint-Pareto-dominance are
+scheduled for implementation; this section is a research-landscape
+record for the paper's related-work framing, not a new item on the
+implementation backlog.

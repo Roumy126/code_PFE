@@ -1,165 +1,62 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-08-26 (added: all three root causes of the scaling stall
-now found and fixed, all with verified zero behavior change; a full
-25-run 12-qubit sweep across all 5 circuit families completed cleanly
--- see CURRENT STATUS)
+Date: 2026-08-27
 
 =====================================================================
 OBJECTIVE
 =====================================================================
 Make quantum circuit optimization scale to larger circuits than
-standard methods allow. Approach: split a target circuit into
-qubit blocks, use a multi-objective genetic algorithm to evolve a
-cheaper/shallower circuit per block that still reproduces the
-original's behavior with high fidelity, then reassemble. Matters
-for near-term (noisy, limited-connectivity) quantum devices, where
-shallower accurate circuits are hard to get via standard,
-non-partitioned optimization.
+standard methods allow: split a target circuit into qubit blocks,
+use a multi-objective genetic algorithm to evolve a cheaper/shallower
+circuit per block that still reproduces the original's behavior with
+high fidelity, then reassemble. Matters for near-term (noisy,
+limited-connectivity) quantum devices, where shallower accurate
+circuits are hard to get via standard, non-partitioned optimization.
 
-Given the ~4-month, laptop-only timeline to a paper (submission
-~Dec 2026), the current phase validates the approach and research
-contribution at a fixed, tractable scale (8 qubits) before chasing
-larger circuits. Scaling up is a planned follow-on, not abandoned.
+Timeline: ~4 months, laptop-only, targeting a December 2026 paper
+submission.
 
 =====================================================================
-CURRENT STATUS
+WHERE WE ARE
 =====================================================================
-Pipeline (partition -> per-block GA optimize -> reassemble ->
-re-inject lost cross-block gates -> compress) is implemented and
-working, with engineering infrastructure to run it reliably at
-scale on a laptop: a CLI experiment runner, a resumable multi-seed
-sweep runner (crash-isolated subprocesses), a results aggregator,
-and a pytest smoke-test suite.
-
-Benchmark suite: 5 standard circuit families (random weakly-
-connected, QAOA MaxCut, W-state, QFT, hardware-efficient ansatz),
-fixed at 8 qubits. Pushing to 12-20 qubits repeatedly hit
-performance walls (hangs / 1hr+ runs) on genuinely entangled
-circuits (QAOA-style) -- paused and deferred rather than debugged
-further at the time; see NEXT STEPS.
-
-Update: profiled where those stalls actually came from (rather than
-continuing to guess) and found one clear, fixable cause -- one of the
-two re-injection strategies (simulated annealing) was repeatedly
-re-checking its own starting circuit's accuracy from scratch,
-thousands of times per run, even though that check's answer never
-actually depended on the starting circuit at all. Replaced it with a
-direct calculation that skips the redundant work entirely. Verified
-this gives the exact same result as before (not an approximation --
-same energies, same decisions, same output), and turns a run that
-previously didn't finish in 10 minutes into one that finishes in
-under a second at the same settings; at the settings the pipeline
-actually uses by default, a 14- and 20-qubit run that used to hang
-for hours each now complete in about 7 seconds.
-
-Update 2: did the same investigation for the other re-injection
-strategy (the greedy one, which currently dominates the final result
-per the finding below). Its problem was different -- it was rebuilding
-and re-checking the ENTIRE candidate circuit's accuracy from scratch
-on every one of up to 300 attempts per run, when only a cached,
-reusable version of that check plus a small local update was actually
-needed each time. Fixed the same way: verified the new version gives
-the exact same accepted/rejected list as before, then measured the
-speedup.
-
-Ran real, full end-to-end pipeline tests (not just the isolated
-strategy) to check both fixes actually work together: a 12-qubit run
-completed in about 83 seconds; a 13-qubit run in about 8 minutes
-(previously, neither finished within 15 minutes at all). The remaining
-cost at this stage comes from a handful of the pipeline's own one-off
-accuracy checks (used for reporting, not search) that neither fix
-touched -- these get slower with qubit count on their own, which is
-why 13 qubits still costs noticeably more than 12.
-
-While running that real test, found a third problem: the DEFAULT
-re-injection strategy (a third, simpler one, distinct from the two
-above) was never actually fixed by the above -- a real run using it
-got stuck for over 6 minutes and had to be stopped by hand. Diagnosed
-and fixed the same day (Update 3 below).
-
-Update 3: fixed the third (default) re-injection strategy. Its
-problem turned out to have an unusually clean fix -- the accuracy
-check it needs can be reduced to a simple formula depending only on
-which type of change is being tried, not on the circuit at all, so
-almost all of the computation it was doing was unnecessary regardless
-of circuit size. Verified this formula gives identical accept/reject
-decisions to the old (correct but slow) method across 500 test cases
-on a real circuit before relying on it. Result: turns a run that
-previously got stuck for 6+ minutes into one that completes in about 2
-minutes -- and unlike the other two fixes, this one has no qubit-count
-ceiling at all (confirmed instant at 12, 13, 16, and 20 qubits alike).
-
-All three known re-injection-strategy slowdowns are now fixed. What's
-left before larger circuits are practical again is a separate, deeper
-problem: past roughly 13-14 qubits, a handful of the pipeline's own
-one-off accuracy checks become too slow by other means already known
-about (see IMPLEMENTATION NOTES) -- these three fixes remove the
-"doing the same check too many times" problem but not that one.
-
-Research contribution chosen and implemented: a second per-block
-algorithm, SMS-EMOA (optimizes for a diverse set of good trade-off
-circuits, vs. NSGA-II's single-best focus), plus two ablations:
-mutation-operator combinations, and an optional local fine-tuning
-pass after the GA search. 260 total runs across all comparisons,
-in runs/results_master.csv. Findings:
-- NSGA-II vs SMS-EMOA: NSGA-II finds the single best circuit
-  slightly more often; SMS-EMOA finds a wider, more diverse set of
-  good trade-offs at no extra compute time. Neither wins outright --
-  reported as complementary.
-- Mutation operators: adding a "delete" option alongside "swap" and
-  "add" gives a better accuracy/size balance than "swap+add" alone
-  (matches a recent published result). But the project's original,
-  simple mutation operator still performs best overall under NSGA-II,
-  so it stays the default there.
-- Local fine-tuning pass: gives a small, real accuracy gain at the
-  per-block level, but that gain gets overshadowed by the later
-  re-injection step, which dominates the final accuracy number at
-  this scale -- a useful negative finding, not a failed feature.
-- Re-running the mutation/fine-tuning ablations against SMS-EMOA
-  showed the best settings are algorithm-specific, not universal:
-  SMS-EMOA prefers "swap+add+delete" (not the simple default), and
-  its fine-tuning gain is small but more consistently positive than
-  under NSGA-II. The paper will need to report each algorithm's own
-  best-paired settings rather than one universal configuration.
-- Cross-cutting takeaway: at 8 qubits, per-block optimization
-  choices matter less to the final result than the re-injection
-  step. Will inform whether results are reported at the per-block
-  level (where real differences show) vs. only end-to-end.
+- Pipeline works end-to-end (partition -> per-block GA optimize ->
+  reassemble -> re-inject lost cross-block connections -> compress),
+  with infrastructure to run it reliably and repeatably: a CLI
+  runner, a resumable multi-seed sweep runner, a results aggregator,
+  and automated smoke tests.
+- Validated on a fixed benchmark of 5 standard circuit types at 8
+  qubits (260+ runs). Chosen research contribution: a second
+  per-block algorithm, SMS-EMOA, compared against the original
+  NSGA-II, plus mutation-operator and local-fine-tuning ablations.
+  Headline finding: NSGA-II finds the single best circuit slightly
+  more often; SMS-EMOA finds a wider, more diverse set of good
+  trade-offs at no extra cost -- reported as complementary, not one
+  replacing the other. The best supporting settings (mutation
+  operator, fine-tuning) turned out to differ per algorithm rather
+  than being universal.
+- Performance walls that used to block anything past 8 qubits (hangs,
+  1hr+ runs) have all been diagnosed and fixed. 12- and 13-qubit runs
+  now complete end-to-end in minutes; a full 25-run sweep at 12 qubits
+  succeeded with 0 failures. Scaling further (13-14+ qubits) still has
+  one known, unsolved bottleneck (see below).
+- Did a literature check of the wider multi-objective algorithm field
+  to confirm SMS-EMOA was a reasonable choice and nothing better-
+  suited was missed. Nothing displaces the existing plan.
 
 =====================================================================
-NEXT STEPS
+NEXT RESEARCH POINTS
 =====================================================================
-- Move into results write-up, targeting ~December 2026 submission.
-- Revisit scaling past 8 qubits as a follow-on effort (not on the
-  critical path for the first submission) -- all three known cost
-  bottlenecks in the re-injection stage are now fixed; 12- and
-  13-qubit runs complete end-to-end. A full 25-run sweep (5 circuit
-  types x 5 repeats) at 12 qubits, at full/production settings, has
-  now been run: every run succeeded (0 failures), averaging 2.4
-  minutes each, ranging from ~1.3 min (fastest circuit type) to ~4
-  min (slowest, the most entangled one). This is real evidence the
-  12-qubit tier is now practical to work with, not just theoretically
-  unblocked. Not yet done: the same full sweep at 13 qubits, and a
-  side-by-side comparison against the existing 8-qubit results. The
-  remaining blocker before pushing past ~13-14 qubits is the deeper
-  accuracy-computation problem noted in IMPLEMENTATION NOTES.
-- Since the fixed strategies are now far cheaper (especially
-  simulated annealing), it may be worth re-comparing them against
-  each other at 8 qubits too -- the earlier finding that simulated
-  annealing "wasn't worth its cost" was measured before this fix.
-
-=====================================================================
-IMPLEMENTATION NOTES
-=====================================================================
-Stack: Qiskit (circuit construction/simulation) + DEAP (NSGA-II /
-NSGA-III / hand-rolled SMS-EMOA multi-objective search). Reference
-pipeline: M1_finale/final_m1_script.py.
-
-Fidelity (the accuracy metric optimized against) is computed exactly
-at 8 qubits -- cheap and fast, not currently an engineering concern.
-An approximate SWAP-test/tensor-network estimator for larger circuits
-was built and works for weakly-connected circuits up to 20 qubits,
-but gets expensive again for highly-entangled ones (cost scales with
-entanglement, not just qubit count) -- known, deferred problem for
-when scaling resumes.
+1. Start results write-up for the December submission.
+2. Re-run the injection-strategy comparison at 8 qubits: one of the
+   two strategies got ~1000x cheaper after the recent fixes, so the
+   earlier "not worth its cost" conclusion should be re-checked.
+3. Push scaling past 8 qubits as a follow-on (not on the critical
+   path for the first submission): run the same full comparison sweep
+   at 12-13 qubits and compare against the 8-qubit results. Going
+   past ~13-14 qubits needs a separate fix to how accuracy is
+   estimated for highly-entangled circuits -- not yet solved.
+4. Candidate next algorithm to add, in priority order: a
+   multi-objective version of the project's own simulated-annealing
+   step (cheapest, reuses existing code) > two more quality-score-
+   based algorithms (IBEA, and a decomposition-based method) >
+   SPEA2 as a classic baseline comparison.
