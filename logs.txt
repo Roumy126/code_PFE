@@ -247,10 +247,18 @@ Phase 2 — fixed benchmark suite — PARTIALLY DONE (2026-08-19):
   circuit in 48/50 runs regardless of --injection-method, and sa vs.
   stochastic were bit-identical results in most cases despite sa taking
   3-6x longer — at this fidelity regime (raw fidelities 0.006-0.28,
-  well below the 0.9999 threshold), sa was wasted compute. (Revisit
-  after the 2026-08-26/27 fixes — see "SCALING" — since sa is now ~1000x
-  cheaper and this comparison was never re-run at equal cost.) Also
-  fixed an observability bug: meta["kept_injections"] always reported
+  well below the 0.9999 threshold), sa was wasted compute. REVISITED
+  (2026-08-27) after the sa_injection fix made it ~1000x cheaper: re-ran
+  the same 8-qubit/5-seed sa-vs-stochastic comparison at equal
+  production settings via `python run_sweep.py` (resumed the existing
+  results_master.csv, ran only the missing sa configs). Finding now
+  INVERTED -- sa is the CHEAPER method (mean wall_clock_s 37.2 vs.
+  stochastic's 52.4), at essentially the same fidelity (0.1465 vs.
+  0.1491 mean, bit-identical in 23/25 paired circuit+seed runs -- the
+  greedy fidelity_driven_injection pass still dominates the final result
+  either way, as before). Practical takeaway: no reason to prefer
+  stochastic over sa any more on cost grounds.
+  Also fixed an observability bug: meta["kept_injections"] always reported
   the sa/stochastic path's list even when the greedy pass actually won;
   now meta records injection_path_used and both paths' fidelities.
   Not started: the actual paper-scale research comparisons (blocked on
