@@ -574,6 +574,41 @@ def approximate_gate_fidelity_echo_mc(U: QuantumCircuit, V: QuantumCircuit, *,
     return sum(vals) / len(vals) if vals else 0.0
 
 
+def approximate_gate_fidelity_statevector_mc(U: QuantumCircuit, V: QuantumCircuit, *,
+                                              samples: int, seed: int) -> float:
+    """
+    Monte-Carlo average of |<psi|U^dagger V|psi>|^2 via DIRECT exact statevector simulation
+    of U|psi> and V|psi> on random product states |psi>, instead of the fidelity-echo
+    circuit's AerSimulator(matrix_product_state) + shot sampling. Same target quantity as
+    approximate_gate_fidelity_echo_mc, exact per sample (no shot noise at all) -- but its cost
+    is O(2^n * gates), independent of entanglement, unlike the MPS backend's cost which is
+    exponential in entanglement but independent of n for low-entanglement circuits.
+
+    This means the two backends have OPPOSITE strengths: MPS stays cheap regardless of n for
+    weakly-entangled circuit families (validated up to n=32 for this project's w_state/
+    hw_efficient_ansatz/qft/weak_random generators), while this statevector backend stays
+    cheap regardless of entanglement up to whatever n statevector simulation is memory-
+    feasible for (~n<=24-28 on a laptop) -- exactly the case (genuinely entangled families
+    like qaoa_maxcut) where MPS's bond dimension blows up. NEITHER dominates the other in
+    general: benchmarked on this project's own generators at n=24, this backend was ~250-400x
+    SLOWER than MPS for w_state/hw_efficient_ansatz (their low entanglement is exactly what
+    MPS exploits and this backend cannot), while being ~150x+ faster than MPS for qaoa_maxcut
+    at n=16 (its entanglement is exactly what MPS chokes on). Callers must pick explicitly per
+    circuit family via safe_fidelity_between_circuits' approximate_backend param -- there is no
+    automatic per-circuit detection here, consistent with how injection_method/block_algorithm/
+    mutation_scheme are chosen in this codebase.
+    """
+    rng = random.Random(seed)
+    n = U.num_qubits
+    total = 0.0
+    for _ in range(samples):
+        prep = _rand_product_prep(n, random.Random(rng.randint(0, 10 ** 9)))
+        sa = Statevector(prep.compose(U)).data
+        sb = Statevector(prep.compose(V)).data
+        total += abs(np.vdot(sa, sb)) ** 2
+    return total / samples if samples else 0.0
+
+
 def safe_fidelity_between_circuits(
     qc_a: QuantumCircuit,
     qc_b: QuantumCircuit,
@@ -583,13 +618,17 @@ def safe_fidelity_between_circuits(
     shots: int = 128,
     seed: int = 0,
     target_operator: Optional[np.ndarray] = None,
+    approximate_backend: str = "mps",
 ) -> float:
     """
     Circuit-vs-circuit fidelity that stays laptop-tractable past compute_fidelity's dense-
     Operator scaling wall: exact trace fidelity (|Tr(Ua Ub^dagger)| / 2^n) when
-    n <= exact_threshold, else a Monte-Carlo fidelity-echo estimate
-    (approximate_gate_fidelity_echo_mc -- see _echo_test_circuit for the method; replaced an
-    earlier SWAP-test formulation on 2026-08-27, same target quantity, much cheaper).
+    n <= exact_threshold, else a Monte-Carlo fidelity-echo estimate above it -- either the
+    default "mps" backend (approximate_gate_fidelity_echo_mc -- see _echo_test_circuit for the
+    method; replaced an earlier SWAP-test formulation on 2026-08-27, same target quantity,
+    much cheaper) or, if approximate_backend="statevector", the exact-per-sample
+    approximate_gate_fidelity_statevector_mc -- see that function's docstring for when to pick
+    which; there is no automatic choice, this must be set explicitly per circuit family.
 
     This is a proxy metric above exact_threshold, not a full-Hilbert-space fidelity: it
     estimates overlap on random PRODUCT states only, so it can diverge more from the exact
@@ -610,6 +649,8 @@ def safe_fidelity_between_circuits(
         Ua = Operator(qc_a).data
         Ub = target_operator if target_operator is not None else Operator(qc_b).data
         return abs(np.trace(Ua @ Ub.conj().T)) / (2 ** n)
+    if approximate_backend == "statevector":
+        return approximate_gate_fidelity_statevector_mc(qc_a, qc_b, samples=samples, seed=seed)
     return approximate_gate_fidelity_echo_mc(qc_a, qc_b, samples=samples, shots=shots, seed=seed)
 
 
@@ -1869,6 +1910,7 @@ def optimise_circuit_pipeline(
     injection_fidelity_exact_threshold: int = 12,
     fidelity_driven_max_trials: int = 300,
     fidelity_driven_statevector_threshold: int = 24,
+    fidelity_approximate_backend: str = "mps",  # "mps" or "statevector"
 ) -> Tuple[QuantumCircuit, Dict[str, object]]:
     print("\nOriginal circuit:")
     print(qc.draw(output="text"))
@@ -1879,7 +1921,8 @@ def optimise_circuit_pipeline(
     # is what made the injection stage intractable past ~10-12 qubits (see logs.txt).
     qc_orig = qc.copy()
     fid_kwargs = dict(exact_threshold=fidelity_exact_threshold, samples=fidelity_samples,
-                      shots=fidelity_shots, seed=sa_seed if sa_seed is not None else 0)
+                      shots=fidelity_shots, seed=sa_seed if sa_seed is not None else 0,
+                      approximate_backend=fidelity_approximate_backend)
     # qc_orig never changes after this point, but it's compared against below in 5 separate
     # safe_fidelity_between_circuits calls (fid_rebuilt/fid_rebuilt1/fid_inj/fid_i/fid_final)
     # plus once more inside fidelity_driven_injection -- each independently rebuilding
@@ -2064,7 +2107,9 @@ def optimise_circuit_pipeline(
     # 8) Summary
     fid_final = safe_fidelity_between_circuits(qc_opt, qc_orig, **fid_kwargs,
                                                target_operator=target_operator_cache)
-    fidelity_backend = "exact" if qc_orig.num_qubits <= fidelity_exact_threshold else "echo_test_mc"
+    fidelity_backend = ("exact" if qc_orig.num_qubits <= fidelity_exact_threshold
+                        else "statevector_mc" if fidelity_approximate_backend == "statevector"
+                        else "echo_test_mc")
     depth_before = qc_orig.depth()
     depth_after = qc_opt.depth()
     print("\n===== Final Summary =====")
@@ -2092,6 +2137,7 @@ def optimise_circuit_pipeline(
         "injection_fidelity_exact_threshold": injection_fidelity_exact_threshold,
         "fidelity_driven_max_trials": fidelity_driven_max_trials,
         "fidelity_driven_statevector_threshold": fidelity_driven_statevector_threshold,
+        "fidelity_approximate_backend": fidelity_approximate_backend,
         "fidelity_driven_tier": ("exact" if qc_orig.num_qubits <= injection_fidelity_exact_threshold
                                  else "statevector" if qc_orig.num_qubits <= fidelity_driven_statevector_threshold
                                  else "echo_test_mc"),

@@ -162,6 +162,20 @@ def parse_args(argv=None):
                          "falls back to the per-trial fidelity-echo/MPS path. Default 24 is a memory-"
                          "based choice (two ~2^n-sized state vectors per sample); raise it if your "
                          "machine has room.")
+    p.add_argument("--fidelity-approximate-backend", choices=["mps", "statevector"], default="mps",
+                    help="Backend for the pipeline's 5 reporting-level fidelity checks "
+                         "(fid_rebuilt/fid_rebuilt1/fid_inj/fid_i/fid_final) above --fidelity-exact-"
+                         "threshold. 'mps' (default, unchanged behavior) stays cheap regardless of n "
+                         "for weakly-entangled circuits (this project's weak_random/w_state/"
+                         "hw_efficient_ansatz/qft generators all validated to n=32) but is exponential "
+                         "in ENTANGLEMENT -- genuinely entangled families (e.g. qaoa_maxcut) can stall "
+                         "it past ~n=16-18. 'statevector' computes the same quantity exactly via direct "
+                         "statevector simulation instead -- independent of entanglement, but its own "
+                         "cost still grows with n regardless (memory-bound past ~n=24-28), and "
+                         "benchmarked ~250-400x SLOWER than 'mps' on this project's low-entanglement "
+                         "generators at n=24 (that's exactly the structure 'mps' exploits and this "
+                         "backend cannot). No auto-detection -- pick 'statevector' explicitly only for "
+                         "genuinely entangled target families past the point 'mps' struggles.")
     p.add_argument("--generations", type=int, default=500)
     p.add_argument("--pop-size", type=int, default=400,
                     help="Must be a multiple of 4 (DEAP's NSGA-II tournament selection requires it).")
@@ -231,6 +245,7 @@ def main(argv=None):
             injection_fidelity_exact_threshold=args.injection_fidelity_exact_threshold,
             fidelity_driven_max_trials=args.fidelity_driven_max_trials,
             fidelity_driven_statevector_threshold=args.fidelity_driven_statevector_threshold,
+            fidelity_approximate_backend=args.fidelity_approximate_backend,
         )
         wall_clock_s = time.perf_counter() - t0
     finally:
