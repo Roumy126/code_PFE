@@ -144,15 +144,24 @@ def parse_args(argv=None):
     p.add_argument("--fidelity-driven-max-trials", type=int, default=300,
                     help="Max trials for fidelity_driven_injection, the greedy complement pass that "
                          "ALWAYS runs regardless of --injection-method and (per the 8-qubit baseline "
-                         "in logs.txt) wins the final result most of the time. Every trial above "
-                         "--injection-fidelity-exact-threshold pays a full fidelity-echo simulation "
-                         "of the whole candidate circuit (no incremental caching there yet, unlike "
-                         "the exact tier's partial-trace fast path) -- confirmed the dominant "
-                         "remaining per-run cost for genuinely entangled families (e.g. QAOA) past "
-                         "that threshold: a real n=16 qaoa_maxcut run did not complete within a 280s "
-                         "bound at the default 300 trials. Was hardcoded (not tunable at all) before "
-                         "2026-08-27; lower this for large-n approximate-tier runs on entangled "
-                         "families until that per-trial cost gets its own incremental fast path.")
+                         "in logs.txt) wins the final result most of the time. Below "
+                         "--fidelity-driven-statevector-threshold, each trial is now a cheap partial-"
+                         "trace update (see that flag) rather than a full circuit resimulation, so "
+                         "this mainly matters above it. Was hardcoded (not tunable at all) before "
+                         "2026-08-27.")
+    p.add_argument("--fidelity-driven-statevector-threshold", type=int, default=24,
+                    help="Above --injection-fidelity-exact-threshold and up to this qubit count, "
+                         "fidelity_driven_injection uses an exact statevector-based fast path instead "
+                         "of resimulating the whole candidate circuit every trial: it caches the "
+                         "target/candidate state vectors for a handful of random product states "
+                         "(candidate's only recomputed on acceptance, via an incremental local-gate "
+                         "update) and reduces each trial to an O(2^n) partial trace -- exact (no shot "
+                         "noise), and dramatically cheaper than the old per-trial fidelity-echo/MPS "
+                         "simulation for genuinely entangled families (e.g. QAOA), which is what made "
+                         "this threshold's range impractical before 2026-08-27. Above this threshold, "
+                         "falls back to the per-trial fidelity-echo/MPS path. Default 24 is a memory-"
+                         "based choice (two ~2^n-sized state vectors per sample); raise it if your "
+                         "machine has room.")
     p.add_argument("--generations", type=int, default=500)
     p.add_argument("--pop-size", type=int, default=400,
                     help="Must be a multiple of 4 (DEAP's NSGA-II tournament selection requires it).")
@@ -221,6 +230,7 @@ def main(argv=None):
             injection_fidelity_shots=args.injection_fidelity_shots,
             injection_fidelity_exact_threshold=args.injection_fidelity_exact_threshold,
             fidelity_driven_max_trials=args.fidelity_driven_max_trials,
+            fidelity_driven_statevector_threshold=args.fidelity_driven_statevector_threshold,
         )
         wall_clock_s = time.perf_counter() - t0
     finally:

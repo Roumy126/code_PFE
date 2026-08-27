@@ -47,7 +47,7 @@ from sklearn.preprocessing import StandardScaler
 
 # --- Quantique (Qiskit) ---
 from qiskit import QuantumCircuit, transpile, QuantumRegister
-from qiskit.quantum_info import Operator
+from qiskit.quantum_info import Operator, Statevector
 from qiskit.transpiler import PassManager
 from qiskit.transpiler.passes import (
     CommutationAnalysis, CommutativeCancellation, Optimize1qGates
@@ -1645,6 +1645,51 @@ def _apply_local_gate_to_operator(U: np.ndarray, n: int, G_loc: np.ndarray, q1: 
     return T.reshape(2 ** n, 2 ** n)
 
 
+def _statevector_pair_reduce(phi: np.ndarray, chi: np.ndarray, n: int, keep_qubits: Sequence[int]) -> np.ndarray:
+    """
+    Reduces two n-qubit state vectors phi, chi to the small (2^k x 2^k) matrix R such that,
+    for any local operator G_loc acting on keep_qubits (embedded with identity elsewhere),
+    Tr(G_loc @ R) == <chi | (G_loc embedded) | phi> exactly.
+
+    Same role as _partial_trace_reduce, but for a RANK-1 "M = |phi><chi|" outer product that
+    is never materialized -- cost O(2^n) (touching the two length-2^n vectors) instead of
+    O(4^n) (touching a 2^n x 2^n matrix), which is what makes this usable well past the
+    dense-operator exact tier's qubit range. Same little-endian axis convention as
+    _partial_trace_reduce / _apply_local_gate_to_operator (keep_qubits[0] -> local qubit 0);
+    verified against brute-force np.outer(phi, chi.conj()) fed through _partial_trace_reduce
+    across random qubit pairs and asymmetric gates (cx) before adoption.
+    """
+    keep_qubits = list(keep_qubits)
+    row_axis = {q: n - 1 - q for q in range(n)}
+    move_axes = [row_axis[q] for q in reversed(keep_qubits)]
+
+    Phi = np.moveaxis(phi.reshape([2] * n), move_axes, list(range(len(move_axes))))
+    Phi2 = Phi.reshape(2 ** len(keep_qubits), -1)
+
+    ChiConj = np.moveaxis(chi.conj().reshape([2] * n), move_axes, list(range(len(move_axes))))
+    Chi2 = ChiConj.reshape(2 ** len(keep_qubits), -1)
+
+    return Phi2 @ Chi2.T
+
+
+def _apply_local_gate_to_statevector(v: np.ndarray, n: int, G_loc: np.ndarray, q1: int, q2: int) -> np.ndarray:
+    """
+    Returns G_embedded @ v, the state vector v with the 2-qubit unitary G_loc applied on
+    qubits (q1, q2), without building the full 2^n x 2^n embedding. Vector analogue of
+    _apply_local_gate_to_operator (same axis convention, verified together) -- used to update
+    a cached candidate-side state vector incrementally on injection acceptance, instead of
+    re-simulating the whole (growing) candidate circuit from scratch.
+    """
+    row_axis = {q: n - 1 - q for q in range(n)}
+    a1, a2 = row_axis[q1], row_axis[q2]
+    T = v.reshape([2] * n)
+    T = np.moveaxis(T, [a2, a1], [0, 1])
+    rest_shape = T.shape[2:]
+    T = (G_loc @ T.reshape(4, -1)).reshape((2, 2) + rest_shape)
+    T = np.moveaxis(T, [0, 1], [a2, a1])
+    return T.reshape(2 ** n)
+
+
 def fidelity_driven_injection(
     base_qc: QuantumCircuit,
     target_qc: QuantumCircuit,
@@ -1654,21 +1699,37 @@ def fidelity_driven_injection(
     fidelity_exact_threshold: int = 10, fidelity_samples: int = 8,
     fidelity_shots: int = 128, fidelity_seed: int = 0,
     target_operator: Optional[np.ndarray] = None,
+    statevector_fast_path_threshold: int = 24,
 ) -> Tuple[QuantumCircuit, List[Tuple[str, int, int, Optional[float]]]]:
     """
     Iteratively adds inter-block gates that improve the fidelity with respect to `target_qc`.
     Stops as soon as the fidelity exceeds `fid_threshold` or `max_trials` is reached.
 
     Each trial only ever appends ONE gate to the current candidate_qc, i.e.
-    U_test = G_trial @ U_candidate. So when candidate_qc is small enough for an exact dense
-    operator (n <= fidelity_exact_threshold), we cache M = U_candidate @ U_target^dagger once
-    (rebuilt only on acceptance, not on every trial) and get each trial's exact fidelity from
-    a cheap partial trace of M over just the 2 qubits the trial's gate touches -- instead of
-    rebuilding and re-simulating the whole candidate circuit from scratch max_trials times.
-    Exact, not an approximation: verified bit-identical to the previous per-trial simulation
-    across cx/cz/rzz trials at n=9-11 before this was adopted. Falls back to the original
-    per-trial simulated path above that threshold, where safe_fidelity_between_circuits
-    switches to the fidelity-echo/MPS estimator anyway.
+    U_test = G_trial @ U_candidate. Three tiers, in decreasing order of exactness:
+
+    1. n <= fidelity_exact_threshold: exact dense-operator tier. Caches
+       M = U_candidate @ U_target^dagger once (rebuilt only on acceptance) and gets each
+       trial's exact fidelity from a partial trace of M over the trial's 2 qubits -- O(4^n)
+       per trial, but avoids rebuilding+resimulating the whole candidate circuit. Exact,
+       verified bit-identical to full per-trial simulation at n=9-11.
+
+    2. fidelity_exact_threshold < n <= statevector_fast_path_threshold: statevector tier.
+       The trial-varying quantity <chi|G_trial^dagger|phi> (phi = target_qc|psi>, chi =
+       candidate_qc|psi>, for each of `fidelity_samples` random product states |psi> --
+       the same quantity safe_fidelity_between_circuits' approximate branch estimates via a
+       fidelity-echo circuit) reduces to a partial trace of a (2^k x 2^k) matrix built
+       from the two length-2^n state vectors phi/chi in O(2^n), via _statevector_pair_reduce
+       -- computed exactly (no shot noise at all, unlike the echo-circuit estimator), and
+       phi/chi are simulated ONCE (phi) or only on acceptance (chi, updated incrementally via
+       _apply_local_gate_to_statevector) rather than resimulating the whole growing candidate
+       circuit from scratch on every one of max_trials trials. This is the tier that makes
+       genuinely entangled families (e.g. QAOA) practical past their MPS-backend wall -- see
+       logs.txt "SCALING" for the profiling that motivated it. Verified exact match against
+       direct re-simulation of each trial's test_qc before adoption.
+
+    3. n > statevector_fast_path_threshold: falls back to the original per-trial simulated
+       path, where safe_fidelity_between_circuits switches to the fidelity-echo/MPS estimator.
 
     target_operator: optional precomputed Operator(target_qc).data (see
     safe_fidelity_between_circuits) -- skips rebuilding target_qc's operator here too, when
@@ -1683,12 +1744,23 @@ def fidelity_driven_injection(
                       shots=fidelity_shots, seed=fidelity_seed)
     n = candidate_qc.num_qubits
     use_fast_path = n <= fidelity_exact_threshold
+    use_statevector_fast_path = (not use_fast_path) and n <= statevector_fast_path_threshold
 
     if use_fast_path:
         U_target = target_operator if target_operator is not None else Operator(target_qc).data
         U_target_dag = U_target.conj().T
         M = Operator(candidate_qc).data @ U_target_dag
         fid_old = abs(np.trace(M)) / (2 ** n)
+    elif use_statevector_fast_path:
+        # Same random-product-state seeding as approximate_gate_fidelity_echo_mc, so this
+        # tier targets the SAME quantity the approximate branch would estimate with the same
+        # fidelity_seed -- just computed exactly instead of via shot-sampled measurement.
+        sample_rng = random.Random(fidelity_seed)
+        preps = [_rand_product_prep(n, random.Random(sample_rng.randint(0, 10 ** 9)))
+                 for _ in range(fidelity_samples)]
+        phi_list = [Statevector(prep.compose(target_qc)).data for prep in preps]
+        chi_list = [Statevector(prep.compose(candidate_qc)).data for prep in preps]
+        fid_old = sum(abs(np.vdot(chi, phi)) ** 2 for chi, phi in zip(chi_list, phi_list)) / len(preps)
     else:
         # candidate_qc only changes on acceptance, so cache its fidelity instead of
         # recomputing it (against target_qc) every trial -- halves the number of fidelity
@@ -1705,6 +1777,12 @@ def fidelity_driven_injection(
             R = _partial_trace_reduce(M, n, [q1, q2])
             G_loc = _local_gate_matrix(gate, theta)
             fid_new = abs(np.trace(G_loc @ R)) / (2 ** n)
+        elif use_statevector_fast_path:
+            G_loc = _local_gate_matrix(gate, theta)
+            G_dag = G_loc.conj().T
+            vals = [np.trace(G_dag @ _statevector_pair_reduce(phi, chi, n, [q1, q2]))
+                    for chi, phi in zip(chi_list, phi_list)]
+            fid_new = sum(abs(v) ** 2 for v in vals) / len(vals)
         else:
             test_qc = candidate_qc.copy()
             if gate == "rzz":
@@ -1715,7 +1793,7 @@ def fidelity_driven_injection(
             fid_new = safe_fidelity_between_circuits(test_qc, target_qc, **fid_kwargs)
 
         if fid_new > fid_old:
-            if use_fast_path:
+            if use_fast_path or use_statevector_fast_path:
                 # Only build the actual circuit once a trial is accepted.
                 test_qc = candidate_qc.copy()
                 if gate == "rzz":
@@ -1731,6 +1809,11 @@ def fidelity_driven_injection(
                 # U_target^dagger and U_candidate_new = G_embedded @ U_candidate -- no need
                 # to rebuild Operator(candidate_qc) from scratch on every acceptance.
                 M = _apply_local_gate_to_operator(M, n, G_loc, q1, q2)
+            elif use_statevector_fast_path:
+                # Same reasoning, on state vectors instead of the operator: chi_new =
+                # G_embedded @ chi_old exactly, so each cached chi is updated in place rather
+                # than re-simulating candidate_qc from scratch.
+                chi_list = [_apply_local_gate_to_statevector(chi, n, G_loc, q1, q2) for chi in chi_list]
             if fid_new >= fid_threshold:
                 break
         else:
@@ -1785,6 +1868,7 @@ def optimise_circuit_pipeline(
     injection_fidelity_shots: int = 16,
     injection_fidelity_exact_threshold: int = 12,
     fidelity_driven_max_trials: int = 300,
+    fidelity_driven_statevector_threshold: int = 24,
 ) -> Tuple[QuantumCircuit, Dict[str, object]]:
     print("\nOriginal circuit:")
     print(qc.draw(output="text"))
@@ -1951,6 +2035,7 @@ def optimise_circuit_pipeline(
                                             fid_threshold=0.9999,
                                             fidelity_seed=fid_kwargs["seed"],
                                             target_operator=target_operator_cache,
+                                            statevector_fast_path_threshold=fidelity_driven_statevector_threshold,
                                             **injection_fid_kwargs)
     print("\nCircuit after inter-block injection with NSGA2 (greedy):")
     print(qc_i.draw(output="text"))
@@ -2006,6 +2091,10 @@ def optimise_circuit_pipeline(
         "injection_fidelity_shots": injection_fidelity_shots,
         "injection_fidelity_exact_threshold": injection_fidelity_exact_threshold,
         "fidelity_driven_max_trials": fidelity_driven_max_trials,
+        "fidelity_driven_statevector_threshold": fidelity_driven_statevector_threshold,
+        "fidelity_driven_tier": ("exact" if qc_orig.num_qubits <= injection_fidelity_exact_threshold
+                                 else "statevector" if qc_orig.num_qubits <= fidelity_driven_statevector_threshold
+                                 else "echo_test_mc"),
         "depth_before": depth_before,
         "depth_after": depth_after,
         "fidelity_final": fid_final,

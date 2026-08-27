@@ -5,9 +5,12 @@ Last updated: 2026-08-27
 Recent activity (newest first; section titles below have full detail):
 - Scaling: replaced the injection stage's SWAP-test fidelity backend with a
   cheaper equivalent "fidelity-echo" method, cached redundant operator
-  rebuilds, and exposed fidelity_driven_injection's trial count as a tunable
-  param. Practical qubit ceiling is now family-dependent (8-32q) rather than
-  a flat 8q. See "SCALING" below for current status and what's still open.
+  rebuilds, exposed fidelity_driven_injection's trial count as a tunable
+  param, and gave that function's per-trial loop its own exact statevector
+  fast path above the dense-operator tier (removes its per-trial full-
+  circuit resimulation for genuinely entangled families like QAOA).
+  Practical qubit ceiling is now family-dependent (8-32q) rather than a
+  flat 8q. See "SCALING" below for current status and what's still open.
 - Research contribution chosen and implemented: SMS-EMOA as a second
   per-block optimizer vs. NSGA-II, plus mutation-operator and hybrid-GA+LAS
   ablations, with sweep results on the 8-qubit benchmark set. See "RESEARCH
@@ -312,11 +315,43 @@ Timeline of what was found and fixed:
   Exposed it as --fidelity-driven-max-trials (default unchanged); a
   previously-stuck n=16 QAOA run completed in ~200s once it and the
   reporting-level sample/shot counts were turned down.
+- 2026-08-27: gave fidelity_driven_injection's per-trial loop its own
+  fast path above the exact tier (fidelity_exact_threshold <
+  n <= new statevector_fast_path_threshold, default 24), instead of
+  resimulating the whole candidate circuit via the MPS-backed fidelity-
+  echo estimator on every trial. Per trial, the loop only ever needs
+  <chi|G_trial^dagger|phi> for phi = target_qc|psi>, chi = candidate_qc|psi>
+  (a handful of fixed random product states |psi>) -- exactly the
+  quantity the approximate branch estimates, just computed EXACTLY (no
+  shot noise) via two new helpers, _statevector_pair_reduce and
+  _apply_local_gate_to_statevector, that reduce it to an O(2^n) partial
+  trace on cached state vectors (phi fixed for the whole call; chi
+  updated incrementally on acceptance, not resimulated). Verified
+  correct three ways: against brute-force outer-product + the existing
+  _partial_trace_reduce; against direct re-simulation of each trial's
+  test_qc (exact match, since both are noise-free); and against the old
+  MPS/shot-based estimator at high shot count (converges, as expected).
+  Real-run result: the n=16 qaoa_maxcut case above -- previously stuck
+  even at reduced --fidelity-driven-max-trials/sample counts -- now runs
+  the FULL default 300 trials in ~21s of injection-stage time (down from
+  ~175s at 20 trials before this fix); with reporting-call cost also
+  isolated, total wall clock dropped from "didn't finish in 280s" to
+  ~50s. New CLI flag: --fidelity-driven-statevector-threshold. New
+  meta field: fidelity_driven_tier ("exact"/"statevector"/"echo_test_mc").
+  Does NOT touch the 5 pipeline-level reporting calls (fid_rebuilt/
+  fid_rebuilt1/fid_inj/fid_i/fid_final) -- those still route through the
+  MPS-based estimator above fidelity_exact_threshold, which is why a
+  real n=20 qaoa_maxcut run still times out (matches the per-family
+  reach mapping above: QAOA's own MPS cost, not fidelity_driven_
+  injection, is what stalls past ~n=18-20 now).
 
 Current practical qubit ceiling (approximate-tier, injection-stage
 defaults): weak_random / w_state / hw_efficient_ansatz / qft comfortably
-handle n=20-32+; qaoa_maxcut needs lower --fidelity-driven-max-trials /
---fidelity-echo-samples / --fidelity-echo-shots past ~n=16.
+handle n=20-32+; qaoa_maxcut now handles n=16 at full default settings
+(previously needed manual trial/sample reduction and still didn't
+match this speed) but still needs help past ~n=18-20, where the
+remaining cost is the reporting-level calls' own MPS backend, not
+fidelity_driven_injection any more.
 run_sweep.py's CIRCUIT_QUBIT_SIZES is still capped at [8] for every
 circuit — a conservative baseline default now, not a technical limit —
 left unchanged since raising it is a real methodology decision, not a
@@ -325,14 +360,15 @@ side effect of a backend fix.
 Not done / open:
 - injection_fidelity_exact_threshold (12, kept below fidelity_exact_
   threshold's 13 specifically to dodge the old slow SWAP test) has not
-  been re-benchmarked against the new echo-test backend and may be
-  raisable.
-- No incremental-MPS-state fast path for fidelity_driven_injection's
-  per-trial loop above that threshold (the natural mirror of the exact
-  tier's partial-trace trick, adapted to MPS tensors) — would need
-  direct manipulation of Aer's internal MPS representation. This is
-  the clearest remaining lever for pushing qaoa_maxcut itself past
-  n~16-18; the other 4 families don't need it.
+  been re-benchmarked against the new echo-test/statevector backends and
+  may be raisable.
+- The same "exact statevector instead of MPS/shot-sampling" idea behind
+  fidelity_driven_injection's new tier could plausibly extend to the 5
+  pipeline-level reporting calls too (they compare structurally different
+  circuit pairs each time, so the per-trial incremental-caching part of
+  the trick doesn't apply, but the exact-instead-of-shot-noisy part
+  might still help) -- not attempted, and is what's now blocking
+  qaoa_maxcut past ~n=18-20.
 - louvain_partition has no seed/random_state of its own — reproducible
   only because run_experiment.py seeds Python's global random/np.random
   before calling the pipeline. Fine for real experiments; would bite

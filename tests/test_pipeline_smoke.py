@@ -92,6 +92,32 @@ def test_pipeline_runs_end_to_end_via_approximate_fidelity(tmp_path, monkeypatch
     assert meta["fidelity_backend"] == "echo_test_mc"
 
 
+def test_pipeline_runs_end_to_end_via_statevector_fidelity_driven_tier(tmp_path, monkeypatch):
+    # Forces fidelity_driven_injection's statevector fast path (injection_fidelity_exact_threshold
+    # below the circuit's own qubit count, but fidelity_driven_statevector_threshold above it) --
+    # exercises _statevector_pair_reduce / _apply_local_gate_to_statevector on a real run, not just
+    # in isolation.
+    monkeypatch.chdir(tmp_path)
+    random.seed(0)
+    np.random.seed(0)
+
+    qc = _two_cluster_circuit()
+    qc_opt, meta = optimise_circuit_pipeline(
+        qc,
+        injection_method="stochastic",
+        fid_threshold=0.9,
+        generations=3,
+        pop_size=8,
+        qubit_duplication_threshold=0.6,
+        injection_fidelity_exact_threshold=2,
+        fidelity_driven_statevector_threshold=10,
+    )
+
+    assert qc_opt.num_qubits == qc.num_qubits
+    assert 0.0 <= meta["fidelity_final"] <= 1.0 + 1e-6
+    assert meta["fidelity_driven_tier"] == "statevector"
+
+
 @pytest.mark.parametrize("kwargs", [
     dict(block_algorithm="smsemoa"),
     dict(mutation_scheme="swap_add"),
