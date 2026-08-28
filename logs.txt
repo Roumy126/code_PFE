@@ -3,6 +3,17 @@ Generated: 2026-08-18
 Last updated: 2026-08-28
 
 Recent activity (newest first; section titles below have full detail):
+- Ran the previously-missing smsemoa+sa sweep (25 runs, 5 circuits x 5
+  seeds, n=8 point/no-hybrid-LAS baseline), closing a gap flagged in the
+  "NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER" section's "Not done" list.
+  0 failed after a first attempt failed all 25 on a wrong-interpreter
+  mistake (bare system python3 instead of .venv, no numpy/qiskit/deap
+  installed there). smsemoa's fidelity_final under sa (0.1230) matches its
+  stochastic value and the same nsga2 > nsga3 > smsemoa ranking already
+  seen under stochastic; wall-clock (34.93s) lands between nsga3's and
+  nsga2's sa times, unlike under stochastic where smsemoa was slowest of
+  the three. See "NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER" below
+  (smsemoa+sa gap closed, 2026-08-28 follow-up).
 - Extended the fair (shared-reference) hypervolume comparison to the
   mutation-scheme and hybrid-LAS ablations (225 more runs regenerated with
   front_raw, 0 failed). Two clean findings: swap_add gives the highest fair
@@ -735,7 +746,8 @@ bar rather than crashing or erroring.
   nsga2             stochastic               0.1491         52.41
   nsga3             sa                       0.1419         33.99
   nsga3             stochastic               0.1419         25.34
-  smsemoa           stochastic               0.1230         50.95  (sa: no data)
+  smsemoa           sa                       0.1230         34.93
+  smsemoa           stochastic               0.1230         50.95
 nsga3's per-seed fidelity_final is BIT-IDENTICAL between sa and stochastic
 (confirmed at full float precision, not just 4-decimal rounding) --
 consistent with the already-documented Phase 2/SCALING finding that
@@ -758,14 +770,30 @@ flip which injection method looks "cheaper overall" once paired with a
 faster block optimizer. Not a contradiction of either finding, a
 downstream consequence of both being true at once.
 
+smsemoa+sa gap closed (2026-08-28 follow-up): ran the previously-missing
+25 smsemoa+sa configs (5 circuits x 5 seeds, same point/no-hybrid-LAS/n=8
+baseline as the rest of this table), 0 failed; aggregate_results.py
+re-run (472 rows total, up from 422). First attempt failed all 25 runs
+with ModuleNotFoundError: No module named 'numpy' -- run_sweep.py was
+invoked with the bare system python3 instead of the project's .venv
+(which has qiskit/deap/numpy installed); no output was written by the
+failed attempt, so nothing needed cleanup before re-running with
+.venv/bin/python. Result: smsemoa's fidelity_final under sa (0.1230) is
+identical to its stochastic value (0.1230) and matches the same
+nsga2 > nsga3 > smsemoa ranking already seen under stochastic --
+smsemoa's lower fidelity is not an injection-method artifact.
+injection_path_used was "fidelity_driven_greedy" in 24/25 runs (1 kept
+the sa result), consistent with nsga2/nsga3's already-documented
+behavior. Wall-clock (34.93s) lands between nsga3's sa time (33.99s) and
+nsga2's (37.17s) -- unlike under stochastic, where smsemoa (50.95s) was
+the slowest of the three; no further root-cause investigation done on
+that ordering difference.
+
 Not done / open:
 - Whether swapping rank_by_front/environmental_select (SMS-EMOA) to use
   tools.sortLogNondominated instead of tools.sortNondominated would close
   most of the wall-clock gap to nsga3, confirming the root cause above is
   sufficient on its own -- not yet tried.
-- smsemoa has never been run with injection_method=sa at all (predates
-  nsga3's extension above -- a pre-existing gap in the original SMS-EMOA
-  research angle, not something this follow-up introduced).
 - No combined best-of-both-axes run for nsga3 either (matching the existing
   "Not done" note on nsga2/smsemoa above -- each axis ablated independently
   by design, consistently across all 3 algorithms now).
