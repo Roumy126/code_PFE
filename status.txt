@@ -53,8 +53,13 @@ WHERE WE ARE
   under NSGA-II, while stochastic is cheaper under NSGA-III, because
   NSGA-III's own block-optimization speedup shows through more when
   paired with stochastic than with sa's roughly-constant own cost.
-  SMS-EMOA's sa-injection data remains missing entirely (a pre-existing
-  gap, not new). Adding a further algorithm is now a
+  SMS-EMOA's sa-injection gap is now closed too (25 runs, 0 failed):
+  its fidelity under sa matches its stochastic value and the same
+  NSGA-II > NSGA-III > SMS-EMOA ranking already seen under stochastic,
+  confirming SMS-EMOA's lower fidelity isn't an injection-method
+  artifact; its sa wall-clock lands between NSGA-III's and NSGA-II's,
+  unlike under stochastic where it was the slowest of the three.
+  Adding a further algorithm is now a
   one-function-plus-one-registry-entry change (BLOCK_OPTIMIZERS in
   final_m1_script.py), not a multi-file edit -- built that way
   specifically so the next one (see below) is cheap to add.
@@ -104,10 +109,7 @@ NEXT RESEARCH POINTS
    NSGA-II needed at n=16-20, or whether the noise-floor/entanglement
    problems there were NSGA-II-independent (fidelity backend choice,
    not block-optimizer choice, so likely yes -- not yet verified).
-3. SMS-EMOA has never been run with injection_method=sa at all (NSGA-III
-   now has, see "WHERE WE ARE" -- SMS-EMOA's sa gap predates that and
-   is a separate, still-open piece of the original research angle).
-4. Candidate next algorithm to add, in priority order: MOSA (a
+3. Candidate next algorithm to add, in priority order: MOSA (a
    multi-objective version of the project's own simulated-annealing
    step -- cheapest, reuses existing code) > two more quality-score-
    based algorithms (IBEA, and a decomposition-based method) >
