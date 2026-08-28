@@ -231,8 +231,12 @@ def parse_args(argv=None):
                          "(default: each circuit's own CIRCUIT_QUBIT_SIZES entry).")
     p.add_argument("--injection-methods", choices=["sa", "stochastic"], nargs="+",
                     default=INJECTION_METHODS)
-    p.add_argument("--block-algorithms", choices=["nsga2", "smsemoa"], nargs="+",
-                    default=BLOCK_ALGORITHMS)
+    p.add_argument("--block-algorithms", choices=["nsga2", "smsemoa", "nsga3"], nargs="+",
+                    default=BLOCK_ALGORITHMS,
+                    help="Must stay in sync with M1_finale.final_m1_script.BLOCK_OPTIMIZERS' "
+                         "keys -- this script deliberately doesn't import that module (it only "
+                         "launches run_experiment.py as a subprocess), so a new algorithm added "
+                         "there needs its name added here too.")
     p.add_argument("--mutation-schemes", choices=["point", "swap_add", "swap_add_delete"],
                     nargs="+", default=MUTATION_SCHEMES)
     p.add_argument("--hybrid-las-options", type=int, choices=[0, 1], nargs="+",

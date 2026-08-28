@@ -3,6 +3,22 @@ Generated: 2026-08-18
 Last updated: 2026-08-28
 
 Recent activity (newest first; section titles below have full detail):
+- Added NSGA-III (Deb & Jain 2014, DEAP's built-in tools.selNSGA3) as a third
+  per-block optimizer alongside NSGA-II/SMS-EMOA, dispatched through a new
+  BLOCK_OPTIMIZERS registry dict in final_m1_script.py instead of an if/elif
+  chain, specifically so a future MOO algorithm (MOSA/IBEA/MOEA-D/SPEA2/MOPSO,
+  see "NEXT STEPS — CANDIDATE MOO ALGORITHMS TO ADD") is a function-plus-one-
+  dict-entry addition, not a multi-file edit. Extended all 3 of the SMS-EMOA
+  research angle's original staged sweeps ((a) algorithm comparison, (b)
+  mutation-scheme ablation, (c) hybrid-LAS ablation) with nsga3 -- 100 new
+  runs, 0 failed. Headline result: nsga3 reaches close to nsga2's fidelity
+  (0.1419 vs 0.1491) at roughly HALF the wall-clock (25.3s vs 52.4s), pairs
+  best with hybrid LAS of the three algorithms (21/25 seed-runs improved,
+  vs. nsga2's 16/25 wash and smsemoa's 18/25), and its mutation-scheme
+  ranking is a THIRD distinct pattern (swap_add ~= point > swap_add_delete)
+  from both nsga2's and smsemoa's -- reinforcing that no mutation operator is
+  universally best, now across 3 algorithms not 2. See "NSGA-III ADDED AS
+  THIRD PER-BLOCK OPTIMIZER" below for full numbers and what's still open.
 - Raised run_sweep.py's default qubit-size grid off its flat 8/12-qubit baseline
   via a real pilot run per family, at the sizes logs.txt itself had claimed were
   already a "practical ceiling" based on isolated fidelity-cost benchmarks. Found
@@ -173,11 +189,15 @@ version — that version was never available to compare against.
 =====================================================================
 NEXT STEPS — CANDIDATE MOO ALGORITHMS TO ADD
 =====================================================================
-Beyond NSGA-II/NSGA-III/SMS-EMOA (done), these would slot into the same
+Beyond NSGA-II/SMS-EMOA/NSGA-III (all three now BLOCK_OPTIMIZERS entries in
+M1_finale/final_m1_script.py, done — see "NSGA-III ADDED AS THIRD PER-BLOCK
+OPTIMIZER" for how NSGA-III specifically was wired in as a registry entry
+for exactly this kind of future addition), these would slot into the same
 pluggable per-block-optimizer / injection-strategy pattern:
 1. MOSA (multi-objective SA) — extends existing sa_injection machinery
    with Pareto-dominance acceptance + archive. Lowest lift.
 2. SMS-EMOA — DONE, see "RESEARCH ANGLE CHOSEN AND IMPLEMENTED".
+2b. NSGA-III — DONE, see "NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER".
 3. IBEA — generalizes SMS-EMOA; could plug in the already-implemented
    compute_epsilon as the driving indicator instead of hypervolume.
 4. MOEA/D — pymoo (already a dependency) ships a ready implementation;
@@ -188,7 +208,9 @@ pluggable per-block-optimizer / injection-strategy pattern:
 6. MOPSO — different paradigm (swarm, not GA); needs a continuous-
    relaxation or discrete-PSO adaptation of the gate-sequence encoding.
    Highest implementation cost of this list.
-Priority by reuse/cost: MOSA > SMS-EMOA [done] > IBEA > MOEA/D > SPEA2 > MOPSO.
+Priority by reuse/cost: MOSA > SMS-EMOA [done] > NSGA-III [done] > IBEA >
+MOEA/D > SPEA2 > MOPSO. MOSA is next up whenever this list is picked back
+up — same lowest-lift reasoning as before NSGA-III was added.
 
 =====================================================================
 NEXT STEPS — IMPROVEMENTS FROM RELATED WORK (web research, 2026-08-18)
@@ -533,6 +555,118 @@ the paper's headline comparison on a block-optimization-stage metric
 only end-to-end fidelity_final. All ~260 rows from these sweeps are in
 runs/results_master.csv. Not done: no combined best-of-both-axes run
 per algorithm (each axis was ablated independently by design).
+
+=====================================================================
+NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER (2026-08-28)
+=====================================================================
+User request: results_master.csv/report/ only had NSGA-II and SMS-EMOA as
+per-block optimizers; asked to add NSGA-III too, "later to be extended with
+more MOO algorithms" -- i.e. the addition itself needed to be designed for
+extensibility, not just bolted on as a third if/elif branch.
+
+Implementation (M1_finale/final_m1_script.py): new optimise_block_nsga3,
+matching optimise_block_nsga2/optimise_block_smsemoa's exact signature
+(qc_target, *, generations, pop_size, P_star, mutation_scheme, hybrid_las)
+and chromosome/gate-pool/mutation/hybrid_las conventions, but environmental
+selection uses DEAP's own built-in tools.selNSGA3 (Deb & Jain 2014
+reference-point niching) with tools.uniform_reference_points(nobj=3, p=12)
+-- 91 reference points, the same p=12 divisions already reviewed and used
+by NSGA-III/AG_multi_objectifs_NSGA3.ipynb for the same 3-objective
+problem. Deliberately reuses DEAP's tested implementation rather than that
+notebook's independently hand-rolled one: the notebook's own point was a
+from-scratch correctness demonstration against the paper (see "OPEN ITEM —
+RESOLVED" above), not a block-optimizer candidate -- for the pipeline, the
+goal is a well-tested option consistent with how optimise_block_nsga2
+already just calls tools.selNSGA2, not a second from-scratch NSGA-III.
+Per DEAP's own reference examples, NSGA-III's reference-point environmental
+selection is what maintains diversity, so (unlike NSGA-II's
+selTournamentDCD mating pool) parent selection needs no crowding-distance
+tournament -- the whole population is shuffled and paired directly.
+
+Extensibility (the actual point of the request): replaced
+optimise_circuit_pipeline's block_algorithm if/elif/else dispatch with a
+BLOCK_OPTIMIZERS = {"nsga2": ..., "smsemoa": ..., "nsga3": ...} registry
+dict. Adding a further MOO algorithm (see "NEXT STEPS — CANDIDATE MOO
+ALGORITHMS TO ADD" below for the priority order: MOSA next) is now: write a
+function matching the signature above, add one entry to BLOCK_OPTIMIZERS.
+run_experiment.py's --block-algorithm choices now read
+sorted(BLOCK_OPTIMIZERS) directly, so it never needs editing again either.
+run_sweep.py deliberately does NOT import final_m1_script (it only launches
+run_experiment.py as a subprocess, by design -- see its own module
+docstring), so its --block-algorithms choices list still needs one manual
+name added per new algorithm; documented in that argument's own help text
+so this isn't rediscovered as a surprise later. generate_report.py needed
+ZERO changes -- its tables/figures already group by block_algorithm
+generically, confirmed by the sweep results below appearing automatically.
+
+Verified before running any sweep: smoke-tested nsga3 end-to-end (plain and
+with hybrid_las) via run_experiment.py directly; confirmed run_sweep.py
+--dry-run builds correct run_ids; added 2 new pytest smoke-test cases
+(nsga3, nsga3_combo) to tests/test_pipeline_smoke.py's existing
+block_algorithm-choices parametrization, mirroring the existing
+smsemoa/smsemoa_combo cases -- full suite 15/15 passing.
+
+Extended all 3 of the SMS-EMOA research angle's staged sweeps with nsga3, at
+the SAME 8-qubit x 5-circuit x 5-seed benchmark settings (point mutation,
+hybrid_las=False, injection_method=stochastic as baseline) so the numbers
+are directly comparable to the existing nsga2/smsemoa rows -- not a new
+methodology, an extension of the existing one. 100 new runs total (25 + 50
++ 25), 0 failed:
+
+(a) algorithm comparison (mutation_scheme=point, hybrid_las=False), now 3-way:
+  block_algorithm  fidelity_final  depth_after  cost_after  mean_hv  total_n_pareto  wall_clock_s
+  nsga2                    0.1491        16.04       82.12   0.0520          121.84       52.41
+  nsga3                    0.1419        15.16       81.32   0.0462           92.20       25.34
+  smsemoa                  0.1230        15.20       78.24   0.0596          171.72       50.95
+  nsga3 reaches close to nsga2's fidelity (within ~5%) at roughly HALF the
+  wall-clock cost of either nsga2 or smsemoa (25.34s vs. 52.41s/50.95s) --
+  a genuinely distinct trade-off point, not simply "better" or "worse" than
+  either existing algorithm. Its Pareto front (92.20) sits between nsga2's
+  (121.84) and smsemoa's (171.72). Not yet root-caused why nsga3 is so much
+  faster here specifically (DEAP's selNSGA3 implementation cost vs.
+  selNSGA2/the hand-rolled hypervolume trim, or fewer generations needed to
+  converge at this problem size) -- worth checking before citing "nsga3 is
+  cheaper" as a general claim rather than an observation at n=8.
+
+(b) mutation ablation, now 3-way (fidelity_final):
+  nsga2:   point 0.1491 > swap_add_delete 0.1293 > swap_add 0.1140
+  nsga3:   swap_add 0.1428 ~= point 0.1419 > swap_add_delete 0.1302
+  smsemoa: swap_add_delete 0.1420 > swap_add 0.1295 > point 0.1230
+  A THIRD distinct ranking, not a repeat of either existing one -- point and
+  swap_add are within noise of each other under nsga3 specifically, with
+  swap_add_delete clearly worst (the opposite of smsemoa's ranking, where
+  swap_add_delete is best). Strengthens the existing "no mutation operator
+  is universally best, it depends on the pairing algorithm" finding: now 3
+  algorithms, 3 different rankings, not a 2-algorithm coincidence.
+
+(c) hybrid GA+LAS ablation, now 3-way:
+  nsga2:   False 0.1491, True 0.1484 -- 16/25 improved (0.64), mean delta -0.0007 (a wash)
+  nsga3:   False 0.1419, True 0.1475 -- 21/25 improved (0.84), mean delta +0.0056
+  smsemoa: False 0.1230, True 0.1249 -- 18/25 improved (0.72), mean delta +0.0019
+  nsga3 pairs BEST with hybrid LAS of the three algorithms -- both the
+  highest improved-fraction and the largest mean fidelity_final gain,
+  clearly ahead of smsemoa's smaller-but-positive effect and nsga2's wash.
+  Consistent with (a)/(b)'s pattern of nsga3 being a distinct third point in
+  the design space rather than interpolating between nsga2 and smsemoa.
+
+Not done / open:
+- No root-cause investigation of WHY nsga3 is ~2x cheaper in (a) -- see
+  above, worth doing before generalizing the claim past n=8.
+- nsga3 not yet included in the injection_method (sa vs. stochastic)
+  comparison -- that axis was only ever run under nsga2 (see "SCALING" and
+  Phase 2 above), so this isn't a nsga3-specific gap, but worth noting it's
+  still nsga2-only.
+- No combined best-of-both-axes run for nsga3 either (matching the existing
+  "Not done" note on nsga2/smsemoa above -- each axis ablated independently
+  by design, consistently across all 3 algorithms now).
+- Not attempted at any qubit size other than 8 -- the SCALING section's
+  per-family qubit-size fixes (statevector backend / raised echo-samples)
+  were validated under nsga2 only; whether nsga3 needs the same treatment
+  at n=16/20 is unknown.
+- The "why is nsga3 faster" question above could matter for interpreting
+  the wall_clock_s column across the whole 422-row results_master.csv if it
+  turns out to be a per-block-count or per-generation effect rather than
+  algorithm-inherent.
 
 =====================================================================
 FRAMEWORK/DEPENDENCY AUDIT (2026-08-18)

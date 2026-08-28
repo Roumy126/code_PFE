@@ -147,11 +147,14 @@ def test_pipeline_runs_end_to_end_via_statevector_fidelity_driven_tier(tmp_path,
 
 @pytest.mark.parametrize("kwargs", [
     dict(block_algorithm="smsemoa"),
+    dict(block_algorithm="nsga3"),
     dict(mutation_scheme="swap_add"),
     dict(mutation_scheme="swap_add_delete"),
     dict(hybrid_las=True),
     dict(block_algorithm="smsemoa", mutation_scheme="swap_add_delete", hybrid_las=True),
-], ids=["smsemoa", "mutation_swap_add", "mutation_swap_add_delete", "hybrid_las", "smsemoa_combo"])
+    dict(block_algorithm="nsga3", mutation_scheme="swap_add_delete", hybrid_las=True),
+], ids=["smsemoa", "nsga3", "mutation_swap_add", "mutation_swap_add_delete", "hybrid_las",
+        "smsemoa_combo", "nsga3_combo"])
 def test_pipeline_new_algorithm_choices_run_end_to_end(tmp_path, monkeypatch, kwargs):
     monkeypatch.chdir(tmp_path)
     random.seed(0)

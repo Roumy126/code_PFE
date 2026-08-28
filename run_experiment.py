@@ -33,6 +33,7 @@ from M1_finale.final_m1_script import (  # noqa: E402
     w_state_circuit,
     qft_circuit,
     hw_efficient_ansatz_circuit,
+    BLOCK_OPTIMIZERS,
 )
 
 try:
@@ -81,9 +82,12 @@ def parse_args(argv=None):
     p.add_argument("--ansatz-reps", type=int, default=1,
                     help="Repetition layers (--circuit hw_efficient_ansatz only).")
     p.add_argument("--injection-method", choices=["sa", "stochastic"], default="stochastic")
-    p.add_argument("--block-algorithm", choices=["nsga2", "smsemoa"], default="nsga2",
-                    help="Per-block multi-objective optimizer: NSGA-II (crowding distance) or "
-                         "SMS-EMOA (hypervolume-contribution environmental selection).")
+    p.add_argument("--block-algorithm", choices=sorted(BLOCK_OPTIMIZERS), default="nsga2",
+                    help="Per-block multi-objective optimizer: NSGA-II (crowding distance), "
+                         "SMS-EMOA (hypervolume-contribution environmental selection), or "
+                         "NSGA-III (Deb & Jain 2014 reference-point selection). Choices are read "
+                         "from M1_finale.final_m1_script.BLOCK_OPTIMIZERS, so a new algorithm "
+                         "added there becomes selectable here automatically.")
     p.add_argument("--mutation-scheme", choices=["point", "swap_add", "swap_add_delete"],
                     default="point",
                     help="'point' (single-gene replace, the original operator) or the GECCO 2025 "

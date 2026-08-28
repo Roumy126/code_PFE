@@ -39,7 +39,7 @@ The project is mainly organized around Jupyter notebooks. To explore and run the
 
 ## Running experiments
 
-`M1_finale/` is the canonical, most-maintained pipeline (partitioning -> per-block NSGA-II -> inter-block injection -> compression). It's importable as a module and has a CLI layer on top for reproducible, structured experiment runs instead of ad-hoc notebook execution:
+`M1_finale/` is the canonical, most-maintained pipeline (partitioning -> per-block MOO optimizer -> inter-block injection -> compression). It's importable as a module and has a CLI layer on top for reproducible, structured experiment runs instead of ad-hoc notebook execution:
 
 ```bash
 source .venv/bin/activate
@@ -58,10 +58,17 @@ python run_experiment.py --n-qubits 12 --seed 0 --generations 100 --pop-size 100
 #   hw_efficient_ansatz   generic hardware-efficient ansatz (H + ry/rz + linear cx; --ansatz-reps)
 python run_experiment.py --circuit qaoa_maxcut --n-qubits 8 --qaoa-p 2 --generations 100 --pop-size 100
 
-# --block-algorithm selects the per-block optimizer (default: nsga2):
-#   nsga2      DEAP NSGA-II (3 objectives: fidelity, depth, cost)
+# --block-algorithm selects the per-block optimizer (default: nsga2). Choices come from
+# M1_finale.final_m1_script.BLOCK_OPTIMIZERS, a name -> function registry -- adding a new
+# MOO algorithm there makes it selectable here automatically (see CLAUDE.md):
+#   nsga2      DEAP NSGA-II (3 objectives: fidelity, depth, cost), crowding-distance
+#              environmental selection
 #   smsemoa    hypervolume-driven SMS-EMOA (larger/more diverse Pareto fronts, similar
 #              wall-clock; doesn't strictly beat nsga2 on peak fidelity, see logs.txt)
+#   nsga3      DEAP's built-in reference-point selection (Deb & Jain 2014); reaches
+#              close to nsga2's fidelity at roughly half the wall-clock cost, and
+#              pairs best with --hybrid-las of the three (see logs.txt's "NSGA-III
+#              ADDED AS THIRD PER-BLOCK OPTIMIZER" for the full 3-way sweep results)
 # --mutation-scheme (point / swap_add / swap_add_delete) and --hybrid-las (runs a
 # finite-difference local angle search on the GA's winner) are independent axes on
 # top of --block-algorithm; which combination wins depends on the pairing (see
@@ -92,7 +99,7 @@ For `qaoa_maxcut`-like cases, pass `--fidelity-approximate-backend statevector` 
 
 **Practical qubit ceiling (2026-08-28, validated by real production pilot runs per family, not cost benchmarks alone):** raising `run_sweep.py`'s grid to each family's isolated-cost-benchmark "ceiling" above and actually inspecting the results found 3 of 4 non-`weak_random` families silently returning noise, not signal — `w_state`@20, `hw_efficient_ansatz`@20, and `qaoa_maxcut`@16 all completed quickly under plain defaults, but `fidelity_final` came back at or below the echo estimator's exact resolution floor (`1/(samples×shots)` = `1/1024` at defaults — `0.000977` or exactly `0.0`, indistinguishable from a genuinely-zero fidelity). `qft`@20 didn't even complete (killed after 47+ minutes): its Fourier-transform structure is inherently globally-entangling, leaving far more cross-block gates to reinject than the other families (180, vs. 3-20), which hit the same MPS/entanglement wall `qaoa_maxcut` needed the statevector backend for. Fixed per family and validated with real reruns: `qaoa_maxcut`/`qft` now use `--fidelity-approximate-backend statevector` (fixes both the wall-clock and, for `qaoa_maxcut`, the floor); `w_state`/`hw_efficient_ansatz` instead use `--fidelity-echo-samples 32 --fidelity-echo-shots 2048` (lowers the floor to `1/65536`; their low entanglement means MPS was never the actual problem there). Results: `qaoa_maxcut`@16 91.7s (was 236-256s) with `fidelity_final=2.2e-05` (was `0.0`); `qft`@20 354.0s (was a 47+ min kill); `w_state`@20 226.3s (was ~60-70s) with `fidelity_final=9.2e-05` (was `0.000977`, i.e. still floor); `hw_efficient_ansatz`@20 204.6s (was ~50-60s) with `fidelity_final=3.2e-04` (was `0.0`). `run_sweep.py` now applies all of this automatically per circuit (`CIRCUIT_FIDELITY_SETTINGS`, gated to apply only above `--fidelity-exact-threshold` so existing n=8/12 data and run_ids are untouched) — a plain `python run_sweep.py` sweeps `weak_random` to n=20, `qaoa_maxcut` to n=16, and the other three to n=20, each with the right fidelity settings already applied. None of the four has been tried past this newly-validated size (`qft` n=32, `qaoa_maxcut` n=20) — extending further needs its own pilot, not an assumption that the fix generalizes; `qaoa_maxcut` specifically becomes memory-bound under statevector past roughly n=24-28 regardless.
 
-**Parallelism:** per-block NSGA-II fitness evaluation (`optimise_block_nsga2`) always uses `joblib.Parallel(-1)` — all available cores, with no CLI knob to cap it. This is intentional: the runtime hardware's own thermal safety mechanisms handle CPU protection, so this software does not need to throttle its own usage.
+**Parallelism:** per-block fitness evaluation, in every `BLOCK_OPTIMIZERS` entry (`optimise_block_nsga2`/`optimise_block_smsemoa`/`optimise_block_nsga3`), always uses `joblib.Parallel(-1)` — all available cores, with no CLI knob to cap it. This is intentional: the runtime hardware's own thermal safety mechanisms handle CPU protection, so this software does not need to throttle its own usage.
 
 ## Project Structure
 - `AG_mono/`: Mono-objective implementations.
@@ -100,7 +107,7 @@ For `qaoa_maxcut`-like cases, pass `--fidelity-approximate-backend statevector` 
 - `NSGA-III/`: Independently hand-rolled NSGA-III (Deb & Jain 2014 reference-point method, not DEAP's `selNSGA3`) — exists only on this branch (`ULBS_qiea`).
 - `Final_test/` & `final_test_AG/`: Validation scripts and performance tests.
 - `m1*/`, `m2*/`: Test modules for different types of circuit blocks.
-- `M1_finale/`: Canonical pipeline (partitioning, block-local NSGA-II/SMS-EMOA, inter-block injection, compression) — see "Running experiments" above.
+- `M1_finale/`: Canonical pipeline (partitioning, block-local NSGA-II/SMS-EMOA/NSGA-III via `BLOCK_OPTIMIZERS`, inter-block injection, compression) — see "Running experiments" above.
 - `run_experiment.py`, `run_sweep.py`, `aggregate_results.py`: CLI tooling for single runs, resumable multi-seed sweeps, and results aggregation.
 - `runs/`: Structured output of experiment runs (gitignored) — one directory per run, aggregated by `aggregate_results.py`.
 - `tests/`: Pytest smoke test for the pipeline (no broader test suite exists).

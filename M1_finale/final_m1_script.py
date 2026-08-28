@@ -1313,6 +1313,143 @@ def optimise_block_smsemoa(qc_target: QuantumCircuit, *, generations=500, pop_si
     return build(best_ind), history_moo
 
 
+# =============================
+# Intra-block optimization: NSGA-III (Deb & Jain 2014, reference-point selection)
+# =============================
+# Third interchangeable per-block optimizer: same chromosome encoding, objectives, and
+# DEAP creator/toolbox pattern as optimise_block_nsga2/optimise_block_smsemoa, but
+# environmental selection replaces crowding distance / hypervolume with DEAP's own
+# built-in reference-point niching (tools.selNSGA3), matching Deb & Jain's Algorithm 1.
+# This deliberately reuses DEAP's tested implementation rather than the from-scratch,
+# independently hand-rolled NSGA-III in NSGA-III/AG_multi_objectifs_NSGA3.ipynb (that
+# notebook's own choice was a correctness demonstration against the paper; here the
+# goal is a well-tested block-optimizer option consistent with how optimise_block_nsga2
+# already just calls tools.selNSGA2). Per DEAP's own reference NSGA-III examples,
+# environmental selection over reference points is what maintains diversity, so parent
+# selection needs no tournament/crowding step -- the whole population is shuffled and
+# paired directly, unlike NSGA-II's selTournamentDCD mating pool above.
+NSGA3_REFERENCE_DIVISIONS = 12  # -> 91 reference points for 3 objectives (Das & Dennis);
+# matches the divisions already reviewed and used by NSGA-III/AG_multi_objectifs_NSGA3.ipynb
+# for the same 3-objective (fidelity, depth, cost) problem.
+
+def optimise_block_nsga3(qc_target: QuantumCircuit, *, generations=500, pop_size=300, P_star=None,
+                          mutation_scheme="point", hybrid_las=False):
+    nq = qc_target.num_qubits; U_target = Operator(qc_target).data
+    gate_pool = ["h", "x", "y", "z", "rx", "ry", "rz"]
+    if nq >= 2:
+        gate_pool += ["cx", "cz", "rzz"]
+
+    def gen_gene():
+        g = random.choice(gate_pool); tgt = random.randrange(nq)
+        if g in {"rx", "ry", "rz"}:
+            return (g, tgt, None, random.uniform(0, 2 * math.pi))
+        if g == "rzz":
+            ctrl = random.choice([q for q in range(nq) if q != tgt])
+            return (g, tgt, ctrl, random.uniform(0, 2 * math.pi))
+        if g in {"cx", "cz"}:
+            ctrl = random.choice([q for q in range(nq) if q != tgt])
+            return (g, tgt, ctrl, None)
+        return (g, tgt, None, None)
+
+    def build(ch):
+        qc = QuantumCircuit(nq)
+        for g, t, ctrl, a in ch:
+            if g == "rzz":
+                qc.rzz(a, ctrl, t)
+            elif g in {"cx", "cz"}:
+                getattr(qc, g)(ctrl, t)
+            elif g in {"rx", "ry", "rz"}:
+                getattr(qc, g)(a, t)
+            else:
+                getattr(qc, g)(t)
+        return qc
+
+    def eval_ind(ind):
+        qc = build(ind); fid = compute_fidelity(qc, U_target)
+        depth = transpile(qc, basis_gates=["cx", "rz", "sx"], optimization_level=1).depth()
+        cost = len(ind)  # chromosome length as proxy (fast). Replace by compute_gate_cost(qc) if desired.
+        return fid, depth, cost
+
+    fid_cache: Dict[Tuple, Tuple[float, int, int]] = {}
+
+    def evaluate_population(individuals):
+        to_run, seen_keys = [], set()
+        for ind in individuals:
+            key = tuple(ind)
+            if key not in fid_cache and key not in seen_keys:
+                to_run.append(ind)
+                seen_keys.add(key)
+        fresh = Parallel(-1)(delayed(eval_ind)(i) for i in to_run)
+        for ind, fit in zip(to_run, fresh):
+            fid_cache[tuple(ind)] = fit
+        return [fid_cache[tuple(ind)] for ind in individuals]
+
+    if not hasattr(creator, "FitnessMulti"):
+        creator.create("FitnessMulti", base.Fitness, weights=(1, -1, -1))
+        creator.create("Individual", list, fitness=creator.FitnessMulti)
+    ref_points = tools.uniform_reference_points(nobj=3, p=NSGA3_REFERENCE_DIVISIONS)
+    tb = base.Toolbox(); tb.register("gene", gen_gene)
+    tb.register("individual", tools.initRepeat, creator.Individual, tb.gene, 12)
+    tb.register("population", tools.initRepeat, list, tb.individual)
+    tb.register("mate", tools.cxTwoPoint)
+    tb.register("mutate", make_mutate_fn(mutation_scheme, gen_gene))
+    tb.register("select", tools.selNSGA3, ref_points=ref_points)
+
+    pop = tb.population(pop_size)
+    fits = evaluate_population(pop)
+    for ind, fit in zip(pop, fits):
+        ind.fitness.values = fit
+    hist_eps = [1 - max(pop, key=lambda i: i.fitness.values[0]).fitness.values[0]]
+    history_moo = []
+
+    for gen in range(generations):
+        offspring = [tb.clone(ind) for ind in pop]
+        random.shuffle(offspring)  # no crowding-distance tournament in NSGA-III -- avoid
+        # positional bias from selNSGA3's front/niche ordering when pairing for crossover.
+        for c1, c2 in zip(offspring[::2], offspring[1::2]):
+            if random.random() < 0.9:
+                tb.mate(c1, c2); del c1.fitness.values, c2.fitness.values
+        for ind in offspring:
+            if random.random() < 0.9:
+                tb.mutate(ind); del ind.fitness.values
+        invalid = [i for i in offspring if not i.fitness.valid]
+        fits = evaluate_population(invalid)
+        for ind, fit in zip(invalid, fits):
+            ind.fitness.values = fit
+        pop = tb.select(pop + offspring, k=pop_size)
+        fits_gen = np.array([ind.fitness.values for ind in pop])
+        history_moo.append(evaluate_run(fits_gen, P_star=P_star))
+        best = max(pop, key=lambda i: i.fitness.values[0])
+        hist_eps.append(1 - best.fitness.values[0])
+        print(f"[NSGA-III] Gen {gen + 1:>4} | Fid {best.fitness.values[0]:.4f} | D {best.fitness.values[1]:>3} | C {best.fitness.values[2]:>3}")
+
+    front = tools.sortNondominated(pop, len(pop), first_front_only=True)[0]
+    plot_convergence(hist_eps, save_as=f"block_fid_conv_nsga3_{nq}q")
+    plot_pareto(front, save_as=f"block_pareto_nsga3_{nq}q")
+    plot_3d_clusters(front, n_clusters=4, save_as=f"block_clusters3d_nsga3_{nq}q")
+
+    final_metrics = evaluate_run(np.array([ind.fitness.values for ind in pop]), P_star=P_star)
+    print(f"Final MOO Metrics (NSGA-III): {final_metrics}")
+    best_ind = max(pop, key=lambda i: i.fitness.values[0])
+    if hybrid_las:
+        best_ind = apply_hybrid_las(best_ind, build, U_target, history_moo)
+    return build(best_ind), history_moo
+
+
+# Registry of per-block optimizers, keyed by the block_algorithm string used throughout
+# the CLI/sweep tooling (run_experiment.py, run_sweep.py) and results_master.csv. Adding
+# a new MOO algorithm as a block optimizer is: write a function matching this signature
+# (qc_target, *, generations, pop_size, P_star, mutation_scheme, hybrid_las) ->
+# (best_circuit, history_moo), then add one entry here -- optimise_circuit_pipeline,
+# run_experiment.py's --block-algorithm, and run_sweep.py's --block-algorithms all read
+# this dict's keys rather than hardcoding an if/elif chain, so none of them need editing
+# for a new algorithm to become selectable.
+BLOCK_OPTIMIZERS = {
+    "nsga2": optimise_block_nsga2,
+    "smsemoa": optimise_block_smsemoa,
+    "nsga3": optimise_block_nsga3,
+}
+
 
 # ## 🌉 Part 7 — Inter-block injection (SA / Stochastic)
 #
@@ -1893,7 +2030,7 @@ def optimise_circuit_pipeline(
     max_block_size: int = 5,
     k_interface: int = 1,
     injection_method: str = "stochastic",  # "sa" or "stochastic"
-    block_algorithm: str = "nsga2",  # "nsga2" or "smsemoa"
+    block_algorithm: str = "nsga2",  # one of BLOCK_OPTIMIZERS' keys, e.g. "nsga2"/"smsemoa"/"nsga3"
     mutation_scheme: str = "point",  # "point", "swap_add", or "swap_add_delete"
     hybrid_las: bool = False,
     fid_threshold: float = 0.999,
@@ -2010,14 +2147,12 @@ def optimise_circuit_pipeline(
         print(sub.draw(output="text"))
         sub.draw('mpl', filename=f"block_{idx}_circuit_original.png", style='mpl', fold=1)
         print(f"  → {block_algorithm} optimization in progress (mutation_scheme={mutation_scheme}, hybrid_las={hybrid_las})...")
-        if block_algorithm == "nsga2":
-            best, hist_moo = optimise_block_nsga2(sub, generations=generations, pop_size=pop_size,
-                                                   mutation_scheme=mutation_scheme, hybrid_las=hybrid_las)
-        elif block_algorithm == "smsemoa":
-            best, hist_moo = optimise_block_smsemoa(sub, generations=generations, pop_size=pop_size,
-                                                     mutation_scheme=mutation_scheme, hybrid_las=hybrid_las)
-        else:
-            raise ValueError('block_algorithm must be "nsga2" or "smsemoa".')
+        if block_algorithm not in BLOCK_OPTIMIZERS:
+            raise ValueError(f"block_algorithm must be one of {sorted(BLOCK_OPTIMIZERS)}.")
+        best, hist_moo = BLOCK_OPTIMIZERS[block_algorithm](
+            sub, generations=generations, pop_size=pop_size,
+            mutation_scheme=mutation_scheme, hybrid_las=hybrid_las,
+        )
         moo_metrics_blocks.append(hist_moo[-1] if hist_moo else {})
         plot_moo_history(hist_moo, title=f"Evolution MoO - Block {idx}", save_as=f"moo_evolution_block_{idx}.png")
         export_all_indicators(hist_moo, idx)

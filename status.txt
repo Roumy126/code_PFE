@@ -1,6 +1,6 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-08-27
+Date: 2026-08-28
 
 =====================================================================
 OBJECTIVE
@@ -23,22 +23,36 @@ WHERE WE ARE
   reassemble -> re-inject lost cross-block connections -> compress),
   with infrastructure to run it reliably and repeatably: a CLI
   runner, a resumable multi-seed sweep runner, a results aggregator,
-  and automated smoke tests.
-- Validated on a fixed benchmark of 5 standard circuit types at 8
-  qubits (260+ runs). Chosen research contribution: a second
-  per-block algorithm, SMS-EMOA, compared against the original
-  NSGA-II, plus mutation-operator and local-fine-tuning ablations.
-  Headline finding: NSGA-II finds the single best circuit slightly
+  automated smoke tests, and now a report generator (generate_report.py)
+  that turns results_master.csv into paper-ready tables/figures with
+  no manual per-algorithm updates needed.
+- Three per-block algorithms now compared head-to-head on the fixed
+  8-qubit, 5-circuit, 5-seed benchmark (360+ runs across all three):
+  NSGA-II (the original), SMS-EMOA, and NSGA-III (added 2026-08-28).
+  Headline findings: NSGA-II finds the single best circuit slightly
   more often; SMS-EMOA finds a wider, more diverse set of good
-  trade-offs at no extra cost -- reported as complementary, not one
-  replacing the other. The best supporting settings (mutation
-  operator, fine-tuning) turned out to differ per algorithm rather
-  than being universal.
+  trade-offs at no extra cost; NSGA-III reaches close to NSGA-II's
+  fidelity at roughly HALF the wall-clock cost and pairs best with
+  the hybrid GA+LAS local search of the three (84% of seed-runs
+  improved, vs. NSGA-II's wash and SMS-EMOA's smaller gain). The best
+  supporting settings (mutation operator, fine-tuning) turned out to
+  differ per algorithm rather than being universal -- now confirmed
+  across three algorithms, not two, strengthening that as a paper
+  finding in its own right. Adding a further algorithm is now a
+  one-function-plus-one-registry-entry change (BLOCK_OPTIMIZERS in
+  final_m1_script.py), not a multi-file edit -- built that way
+  specifically so the next one (see below) is cheap to add.
 - Performance walls that used to block anything past 8 qubits (hangs,
-  1hr+ runs) have all been diagnosed and fixed. 12- and 13-qubit runs
-  now complete end-to-end in minutes; a full 25-run sweep at 12 qubits
-  succeeded with 0 failures. Scaling further (13-14+ qubits) still has
-  one known, unsolved bottleneck (see below).
+  1hr+ runs) have all been diagnosed and fixed for NSGA-II. Confirmed
+  those cost benchmarks were incomplete, though: raising the sweep
+  grid to each family's claimed "safe" size and actually inspecting
+  results found 3 of 4 non-weak_random families were returning
+  fidelity numbers at or below the estimator's noise floor (reporting
+  ~0 despite completing fine), and one family (qft) didn't even
+  finish (killed after 47+ min). Root-caused and fixed per family
+  (different fix needed per family -- no single setting worked for
+  all), validated with real reruns. Scaling fixes were validated
+  under NSGA-II only so far -- not yet re-checked for NSGA-III/SMS-EMOA.
 - Did a literature check of the wider multi-objective algorithm field
   to confirm SMS-EMOA was a reasonable choice and nothing better-
   suited was missed. Nothing displaces the existing plan.
@@ -47,16 +61,20 @@ WHERE WE ARE
 NEXT RESEARCH POINTS
 =====================================================================
 1. Start results write-up for the December submission.
-2. Re-run the injection-strategy comparison at 8 qubits: one of the
-   two strategies got ~1000x cheaper after the recent fixes, so the
-   earlier "not worth its cost" conclusion should be re-checked.
-3. Push scaling past 8 qubits as a follow-on (not on the critical
-   path for the first submission): run the same full comparison sweep
-   at 12-13 qubits and compare against the 8-qubit results. Going
-   past ~13-14 qubits needs a separate fix to how accuracy is
-   estimated for highly-entangled circuits -- not yet solved.
-4. Candidate next algorithm to add, in priority order: a
+2. Root-cause why NSGA-III is ~2x cheaper than NSGA-II/SMS-EMOA at
+   n=8 (DEAP's selNSGA3 implementation cost vs. the others, or fewer
+   generations needed to converge at this problem size) before citing
+   it as a general "NSGA-III is cheaper" claim rather than an n=8
+   observation.
+3. Extend NSGA-III into the injection-method (sa vs. stochastic)
+   comparison -- that axis has only ever been run under NSGA-II.
+4. Check whether NSGA-III/SMS-EMOA need the same per-family qubit-
+   scaling fixes (statevector backend / raised echo-samples) that
+   NSGA-II needed at n=16-20, or whether the noise-floor/entanglement
+   problems there were NSGA-II-independent (fidelity backend choice,
+   not block-optimizer choice, so likely yes -- not yet verified).
+5. Candidate next algorithm to add, in priority order: MOSA (a
    multi-objective version of the project's own simulated-annealing
-   step (cheapest, reuses existing code) > two more quality-score-
+   step -- cheapest, reuses existing code) > two more quality-score-
    based algorithms (IBEA, and a decomposition-based method) >
    SPEA2 as a classic baseline comparison.
