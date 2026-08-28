@@ -3,6 +3,18 @@ Generated: 2026-08-18
 Last updated: 2026-08-28
 
 Recent activity (newest first; section titles below have full detail):
+- Extended the fair (shared-reference) hypervolume comparison to the
+  mutation-scheme and hybrid-LAS ablations (225 more runs regenerated with
+  front_raw, 0 failed). Two clean findings: swap_add gives the highest fair
+  HV for all 3 algorithms (refines, doesn't overturn, the earlier "outlier/
+  bloat artifact" caveat -- it's real coverage, just not efficiency); fair
+  HV is structurally IDENTICAL between hybrid_las=True/False per algorithm,
+  confirmed as a real by-design property (hybrid_las only refines the
+  single best_ind after the recorded front is already computed). Also
+  confirmed regenerating old data with today's code causes small legitimate
+  drift in previously-quoted numbers (e.g. nsga2's fidelity_final
+  0.1491->0.1465) -- verified NOT a live non-determinism bug. See
+  "HYPERVOLUME COMPARABILITY ACROSS ALGORITHMS" below.
 - Root-caused a supervisor question about why nsga3's hypervolume is lower
   than nsga2's: evaluate_run's HV uses a PER-RUN ADAPTIVE reference point
   and normalization, not comparable across algorithms (same mechanism
@@ -853,17 +865,85 @@ algorithm metric going forward; report mean_hv only with the adaptive-
 scheme caveat, or fair_mean_hv when a hypervolume comparison specifically
 is needed.
 
+Extended to the mutation-scheme and hybrid-LAS ablations (2026-08-28
+follow-up): regenerated the 150 mutation-ablation runs (swap_add/
+swap_add_delete, all 3 algorithms) and 75 hybrid-LAS-ablation runs
+(hybrid_las=True, all 3 algorithms) the same way the baseline was --
+moved the existing 225 aside (a bulk rm -rf was blocked by the permission
+classifier; moving was the safer choice anyway and is what was done for
+the baseline too) and re-ran via run_sweep.py, 0 failed. generate_report.py
+gained table_fair_hv_mutation_ablation and table_fair_hv_hybrid_las_
+ablation, refactored to share _pooled_fair_hv_rows/_aggregate_fair_hv with
+the baseline table rather than duplicating the pooling logic three times.
+
+Mutation-scheme ablation, fair hypervolume:
+  nsga2:   swap_add 0.8944 > point 0.8149 > swap_add_delete 0.8088
+  nsga3:   swap_add 0.8823 > swap_add_delete 0.7755 > point 0.7630
+  smsemoa: swap_add 0.9073 > swap_add_delete 0.8252 > point 0.8081
+swap_add gives the HIGHEST fair hypervolume for ALL THREE algorithms,
+consistently -- this refines (does not overturn) the earlier "swap_add's
+outlier mean_hv ... is a per-run-normalization/bloat artifact, not a real
+front-quality win" caveat from "RESEARCH ANGLE CHOSEN AND IMPLEMENTED"
+above: under a FAIR metric the elevated HV survives, so it is not purely
+a normalization artifact. But cost_after is still highest for swap_add in
+every run (unchanged from before), so the more precise reading is: swap_add
+does genuinely cover more objective-space volume (its variable-length
+chromosomes reach a wider, more varied range of depth/cost trade-offs),
+which is a real property hypervolume is supposed to reward -- it is just
+not the same thing as "swap_add finds more EFFICIENT solutions" (it
+doesn't; fidelity_final/cost_after both still favor point or swap_add_
+delete depending on algorithm, see the existing mutation_ablation table).
+Bigger fair HV here means wider coverage, not better trade-offs -- both
+are legitimate readings of hypervolume, this project just needs to be
+explicit about which one a given figure is making a claim about.
+
+Hybrid-LAS ablation, fair hypervolume: IDENTICAL between hybrid_las=False
+and hybrid_las=True for every algorithm (nsga2 0.8149/0.8149, nsga3
+0.7630/0.7630, smsemoa 0.8081/0.8081 -- to displayed precision). Verified
+this is a genuine structural property, not a bug: in all three
+optimise_block_* functions, final_metrics = evaluate_run(...) (the call
+that produces front_raw, hence any HV computed from it) runs on `pop`
+BEFORE hybrid_las is applied; hybrid_las only refines a COPY of the single
+best_ind afterward and never touches `pop` or triggers another
+evaluate_run call. So hybrid_las structurally cannot affect the recorded
+per-block Pareto-front metrics (HV, Spread, Spacing, front_raw, adaptive
+or fair) -- its entire effect is on fidelity_final (via the final built
+circuit), which IS where the existing hybrid_las_ablation table already
+shows its effect. This wasn't previously visible because
+table_hybrid_las_ablation never surfaced mean_hv at all -- worth keeping
+in mind when reading any hypervolume-based comparison of hybrid_las
+runs: there is nothing to compare, by construction, at the per-block level.
+
+Also noticed while regenerating: the baseline's own fidelity_final/
+wall_clock_s shifted slightly from their originally-reported values (e.g.
+nsga2's mean fidelity_final moved from 0.1491 to 0.1465, wall_clock_s from
+52.41s to roughly half that) purely as a side effect of re-executing the
+SAME seeds through TODAY's current codebase state instead of whatever
+state the code was in when they were first measured (days apart, several
+unrelated fixes landed in between). Verified this is NOT a live
+non-determinism bug: ran one exact config (weak_random, nsga2, seed=0,
+point/False/stochastic) twice back-to-back and got bit-identical
+fidelity_final both times. results_master.csv/report/ are the current,
+internally-consistent source of truth; historical entries elsewhere in
+this log that quote the older exact numbers reflect what was measured at
+the time, not necessarily what a fresh re-run would show today -- expected
+and unavoidable whenever old data gets regenerated for an unrelated reason
+(here, adding front_raw), not something to chase further.
+
 Not done / open:
-- fair_hv_comparison only covers the 75-run algorithm-comparison baseline
-  (point mutation, no hybrid-LAS, stochastic injection, n=8) -- not
-  computed for the mutation-scheme or hybrid-LAS ablations, which would
-  need the same front_raw data (those runs predate this fix and would
-  need regenerating too, same as the baseline was).
 - No investigation of WHY nsga3's front is genuinely smaller under fair
   comparison (not just adaptively-distorted) -- e.g. whether its
   reference-point niching (Das & Dennis) converges to fewer distinct
   non-dominated solutions at this population size/objective count by
   design, versus NSGA-II's crowding distance actively rewarding spread.
+- swap_add's genuinely-higher fair HV (coverage) vs. its worse cost_after
+  (bloat) is reported above as two legitimate, coexisting readings, not
+  reconciled into one number -- if the paper needs a single verdict on
+  mutation schemes, it will need to pick which one (efficiency or
+  coverage) is the primary criterion and say so explicitly.
+- The injection-method and scaling-related fair-HV extensions (if wanted)
+  would need the same regenerate-with-front_raw treatment as everything
+  above -- not started.
 
 =====================================================================
 FRAMEWORK/DEPENDENCY AUDIT (2026-08-18)

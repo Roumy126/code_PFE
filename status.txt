@@ -81,7 +81,16 @@ WHERE WE ARE
   only shrinks (11.2% -> 6.4%), it doesn't disappear -- NSGA-III's
   front is genuinely a bit smaller even when compared fairly. Report
   fidelity_final (already directly comparable) as the primary metric
-  going forward; report hypervolume only via the new fair table.
+  going forward; report hypervolume only via the new fair table. Since
+  extended to the mutation-scheme and hybrid-LAS ablations too (225 more
+  runs, 0 failed): swap_add gives the highest fair hypervolume for all
+  3 algorithms (a real coverage property, not the earlier-suspected
+  normalization artifact -- but still not the same as finding more
+  efficient solutions, cost_after is still worst for swap_add); fair
+  hypervolume is structurally IDENTICAL between hybrid_las on/off per
+  algorithm, confirmed as by-design (hybrid_las only refines the single
+  best individual after the recorded front is already computed, never
+  touches the population).
 - Did a literature check of the wider multi-objective algorithm field
   to confirm SMS-EMOA was a reasonable choice and nothing better-
   suited was missed. Nothing displaces the existing plan.
@@ -98,11 +107,7 @@ NEXT RESEARCH POINTS
 3. SMS-EMOA has never been run with injection_method=sa at all (NSGA-III
    now has, see "WHERE WE ARE" -- SMS-EMOA's sa gap predates that and
    is a separate, still-open piece of the original research angle).
-4. Extend the fair hypervolume comparison to the mutation-scheme and
-   hybrid-LAS ablations too (currently only covers the plain
-   algorithm-comparison baseline) -- needs regenerating those runs'
-   metrics.json the same way the baseline was.
-5. Candidate next algorithm to add, in priority order: MOSA (a
+4. Candidate next algorithm to add, in priority order: MOSA (a
    multi-objective version of the project's own simulated-annealing
    step -- cheapest, reuses existing code) > two more quality-score-
    based algorithms (IBEA, and a decomposition-based method) >

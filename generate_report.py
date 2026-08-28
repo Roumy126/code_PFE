@@ -132,28 +132,32 @@ def _normalize_shared(costs: np.ndarray, f_min: np.ndarray, f_max: np.ndarray) -
     return (costs - f_min) / denom
 
 
-def table_fair_hv_comparison(runs_dir: Path) -> pd.DataFrame:
-    """Cross-algorithm-comparable hypervolume, computed from raw Pareto-front points
-    (metrics.json's front_raw field, added 2026-08-28 specifically to make this table
-    possible) instead of results_master.csv's mean_hv, which uses a private per-run
-    reference point and normalization -- valid for tracking one run's own convergence,
-    NOT for ranking algorithms against each other (verified: nsga2 ranks above nsga3
-    under the adaptive scheme on real data, but nsga3 ranks above nsga2 on the same
-    matched front under this fixed-reference scheme -- see logs.txt).
+def _pooled_fair_hv_rows(runs_dir: Path, mutation_scheme: str, hybrid_las: bool) -> list:
+    """Core fair-HV pooling logic for one (mutation_scheme, hybrid_las) combination --
+    returns one row per (circuit, seed, block, block_algorithm), computed from raw
+    Pareto-front points (metrics.json's front_raw field, added 2026-08-28 specifically to
+    make this possible) instead of results_master.csv's mean_hv, which uses a private
+    per-run reference point and normalization -- valid for tracking one run's own
+    convergence, NOT for ranking algorithms against each other (verified on real data:
+    the nsga2-vs-smsemoa ranking flips, and the nsga2-vs-nsga3 gap shrinks, under this
+    fair scheme vs. the adaptive one -- see logs.txt's "HYPERVOLUME COMPARABILITY" entry).
 
     For each (circuit, seed) with front_raw data from >=2 algorithms, pools all present
     algorithms' front points PER BLOCK INDEX (blocks are identical across algorithms for
     a given circuit+seed, since partitioning happens before block_algorithm is chosen),
     derives ONE shared min/max normalization from that pooled set, and evaluates each
-    algorithm's HV against the one shared FAIR_HV_REF_POINT.
+    algorithm's HV against the one shared FAIR_HV_REF_POINT. Shared by all three fair-HV
+    tables below (baseline, mutation ablation, hybrid-LAS ablation) -- each just picks
+    which (mutation_scheme, hybrid_las) combinations to pool over.
     """
     rows = []
     n_mismatched = 0
+    las_flag = "las1" if hybrid_las else "las0"
     for circuit in FAIR_HV_CIRCUITS:
         for seed in range(FAIR_HV_N_SEEDS):
             per_algo_blocks = {}
             for algo in FAIR_HV_ALGORITHMS:
-                run_id = f"{circuit}_8q_stochastic_{algo}_point_las0_g100_p100_seed{seed}"
+                run_id = f"{circuit}_8q_stochastic_{algo}_{mutation_scheme}_{las_flag}_g100_p100_seed{seed}"
                 metrics_path = runs_dir / run_id / "metrics.json"
                 if not metrics_path.exists():
                     continue
@@ -176,18 +180,48 @@ def table_fair_hv_comparison(runs_dir: Path) -> pd.DataFrame:
                 f_min, f_max = pooled.min(axis=0), pooled.max(axis=0)
                 for algo, costs in per_algo_costs.items():
                     hv = _PymooHV(ref_point=FAIR_HV_REF_POINT)(_normalize_shared(costs, f_min, f_max))
-                    rows.append({"circuit": circuit, "seed": seed, "block": b, "block_algorithm": algo, "fair_hv": hv})
+                    rows.append({"circuit": circuit, "seed": seed, "block": b, "block_algorithm": algo,
+                                 "mutation_scheme": mutation_scheme, "hybrid_las": hybrid_las, "fair_hv": hv})
     if n_mismatched:
-        print(f"⚠️ table_fair_hv_comparison: skipped {n_mismatched} (circuit, seed) groups "
-              f"with mismatched block counts across algorithms")
+        print(f"⚠️ fair_hv pooling (mutation_scheme={mutation_scheme}, hybrid_las={hybrid_las}): "
+              f"skipped {n_mismatched} (circuit, seed) groups with mismatched block counts")
+    return rows
+
+
+def _aggregate_fair_hv(rows: list, group_cols: list) -> pd.DataFrame:
     detail = pd.DataFrame(rows)
     if detail.empty:
-        return pd.DataFrame(columns=["block_algorithm", "n_runs", "fair_mean_hv"])
-    per_run = detail.groupby(["circuit", "seed", "block_algorithm"])["fair_hv"].mean().reset_index()
-    return per_run.groupby("block_algorithm").agg(
+        return pd.DataFrame(columns=group_cols + ["n_runs", "fair_mean_hv"])
+    per_run = detail.groupby(["circuit", "seed"] + group_cols)["fair_hv"].mean().reset_index()
+    return per_run.groupby(group_cols).agg(
         n_runs=("fair_hv", "count"),
         fair_mean_hv=("fair_hv", "mean"),
     ).reset_index()
+
+
+def table_fair_hv_comparison(runs_dir: Path) -> pd.DataFrame:
+    """Fair (shared fixed reference point) hypervolume at the baseline settings --
+    mirrors table_algorithm_comparison's filter, see _pooled_fair_hv_rows' docstring."""
+    rows = _pooled_fair_hv_rows(runs_dir, mutation_scheme="point", hybrid_las=False)
+    return _aggregate_fair_hv(rows, ["block_algorithm"])
+
+
+def table_fair_hv_mutation_ablation(runs_dir: Path) -> pd.DataFrame:
+    """Fair hypervolume across mutation schemes -- mirrors table_mutation_ablation but
+    with a shared fixed reference point instead of results_master.csv's adaptive mean_hv."""
+    rows = []
+    for scheme in ["point", "swap_add", "swap_add_delete"]:
+        rows += _pooled_fair_hv_rows(runs_dir, mutation_scheme=scheme, hybrid_las=False)
+    return _aggregate_fair_hv(rows, ["block_algorithm", "mutation_scheme"])
+
+
+def table_fair_hv_hybrid_las_ablation(runs_dir: Path) -> pd.DataFrame:
+    """Fair hypervolume with/without hybrid LAS -- mirrors table_hybrid_las_ablation but
+    with a shared fixed reference point instead of results_master.csv's adaptive mean_hv."""
+    rows = []
+    for las in [False, True]:
+        rows += _pooled_fair_hv_rows(runs_dir, mutation_scheme="point", hybrid_las=las)
+    return _aggregate_fair_hv(rows, ["block_algorithm", "hybrid_las"])
 
 
 def table_mutation_ablation(df: pd.DataFrame) -> pd.DataFrame:
@@ -352,7 +386,8 @@ def main(argv=None):
     p.add_argument("--input", default="runs/results_master.csv", type=Path)
     p.add_argument("--out-dir", default="report", type=Path)
     p.add_argument("--runs-dir", default="runs", type=Path,
-                    help="Used only by table_fair_hv_comparison, which reads metrics.json "
+                    help="Used only by the fair-HV tables (table_fair_hv_comparison/"
+                         "_mutation_ablation/_hybrid_las_ablation), which read metrics.json "
                          "files directly for their raw Pareto-front points.")
     args = p.parse_args(argv)
 
@@ -370,7 +405,9 @@ def main(argv=None):
         "algorithm_comparison": table_algorithm_comparison(df),
         "fair_hv_comparison": table_fair_hv_comparison(args.runs_dir),
         "mutation_ablation": table_mutation_ablation(df),
+        "fair_hv_mutation_ablation": table_fair_hv_mutation_ablation(args.runs_dir),
         "hybrid_las_ablation": table_hybrid_las_ablation(df),
+        "fair_hv_hybrid_las_ablation": table_fair_hv_hybrid_las_ablation(args.runs_dir),
         "injection_method_comparison": table_injection_method_comparison(df),
         "injection_method_legacy": table_injection_method_legacy(df),
         "scaling": table_scaling(df),
@@ -402,10 +439,18 @@ def main(argv=None):
     fig_grouped_bar(tables["mutation_ablation"], x="mutation_scheme", hue="block_algorithm",
                      y="fidelity_final", title="Mutation-scheme ablation",
                      ylabel="fidelity_final", out_path=figures_dir / "mutation_ablation.png")
+    if not tables["fair_hv_mutation_ablation"].empty:
+        fig_grouped_bar(tables["fair_hv_mutation_ablation"], x="mutation_scheme", hue="block_algorithm",
+                         y="fair_mean_hv", title="Mutation-scheme ablation: fair hypervolume",
+                         ylabel="fair_mean_hv", out_path=figures_dir / "mutation_ablation_fair_hv.png")
 
     fig_grouped_bar(tables["hybrid_las_ablation"], x="block_algorithm", hue="hybrid_las",
                      y="fidelity_final", title="Hybrid GA+LAS ablation",
                      ylabel="fidelity_final", out_path=figures_dir / "hybrid_las_ablation.png")
+    if not tables["fair_hv_hybrid_las_ablation"].empty:
+        fig_grouped_bar(tables["fair_hv_hybrid_las_ablation"], x="block_algorithm", hue="hybrid_las",
+                         y="fair_mean_hv", title="Hybrid GA+LAS ablation: fair hypervolume",
+                         ylabel="fair_mean_hv", out_path=figures_dir / "hybrid_las_ablation_fair_hv.png")
 
     fig_grouped_bar(tables["injection_method_comparison"], x="block_algorithm", hue="injection_method",
                      y="fidelity_final", title="Injection method: fidelity",
