@@ -166,15 +166,16 @@ def table_hybrid_las_ablation(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def table_injection_method_comparison(df: pd.DataFrame) -> pd.DataFrame:
-    """sa vs stochastic injection, current-schema baseline (post fast-path fix)."""
+    """sa vs stochastic injection, current-schema baseline (post fast-path fix), per
+    block algorithm -- this axis started nsga2-only; extend as other algorithms grow
+    sa-injection data (see logs.txt's "NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER")."""
     subset = df[
         (df["n_qubits"] == BASELINE_N_QUBITS)
         & (~df["is_legacy_schema"])
-        & (df["block_algorithm"] == "nsga2")
         & (df["mutation_scheme"] == "point")
         & (df["hybrid_las"] == False)
     ]
-    return subset.groupby("injection_method").agg(
+    return subset.groupby(["block_algorithm", "injection_method"]).agg(
         n_runs=("run_id", "count"),
         fidelity_final=("fidelity_final", "mean"),
         wall_clock_s=("wall_clock_s", "mean"),
@@ -310,11 +311,12 @@ def main(argv=None):
                      y="fidelity_final", title="Hybrid GA+LAS ablation",
                      ylabel="fidelity_final", out_path=figures_dir / "hybrid_las_ablation.png")
 
-    inj = tables["injection_method_comparison"].set_index("injection_method")
-    fig_bar(inj["fidelity_final"], title="Injection method: fidelity", ylabel="fidelity_final",
-            out_path=figures_dir / "injection_method_fidelity.png")
-    fig_bar(inj["wall_clock_s"], title="Injection method: wall-clock cost", ylabel="wall_clock_s",
-            out_path=figures_dir / "injection_method_wallclock.png")
+    fig_grouped_bar(tables["injection_method_comparison"], x="block_algorithm", hue="injection_method",
+                     y="fidelity_final", title="Injection method: fidelity",
+                     ylabel="fidelity_final", out_path=figures_dir / "injection_method_fidelity.png")
+    fig_grouped_bar(tables["injection_method_comparison"], x="block_algorithm", hue="injection_method",
+                     y="wall_clock_s", title="Injection method: wall-clock cost",
+                     ylabel="wall_clock_s", out_path=figures_dir / "injection_method_wallclock.png")
 
     fig_scaling_lines(tables["scaling"], y="wall_clock_s", title="Wall-clock cost vs n_qubits",
                        ylabel="wall_clock_s (log)", out_path=figures_dir / "scaling_wallclock.png", log_y=True)

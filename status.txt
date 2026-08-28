@@ -42,11 +42,19 @@ WHERE WE ARE
   matching the real-run profile) -- an implementation detail of this
   codebase's current setup, not evidence NSGA-III is a fundamentally
   more efficient algorithm; report it that way, not as a general claim.
-  The best
-  supporting settings (mutation operator, fine-tuning) turned out to
-  differ per algorithm rather than being universal -- now confirmed
-  across three algorithms, not two, strengthening that as a paper
-  finding in its own right. Adding a further algorithm is now a
+  The best supporting settings (mutation operator, fine-tuning) turned
+  out to differ per algorithm rather than being universal -- now
+  confirmed across three algorithms, not two, strengthening that as a
+  paper finding in its own right. NSGA-III has also now been extended
+  into the sa-vs-stochastic injection-method comparison (previously
+  NSGA-II-only): same headline pattern (fidelity ties, injection
+  method barely matters once fidelity_driven_injection's greedy pass
+  dominates), but with one new nuance -- sa is cheaper than stochastic
+  under NSGA-II, while stochastic is cheaper under NSGA-III, because
+  NSGA-III's own block-optimization speedup shows through more when
+  paired with stochastic than with sa's roughly-constant own cost.
+  SMS-EMOA's sa-injection data remains missing entirely (a pre-existing
+  gap, not new). Adding a further algorithm is now a
   one-function-plus-one-registry-entry change (BLOCK_OPTIMIZERS in
   final_m1_script.py), not a multi-file edit -- built that way
   specifically so the next one (see below) is cheap to add.
@@ -69,13 +77,14 @@ WHERE WE ARE
 NEXT RESEARCH POINTS
 =====================================================================
 1. Start results write-up for the December submission.
-2. Extend NSGA-III into the injection-method (sa vs. stochastic)
-   comparison -- that axis has only ever been run under NSGA-II.
-3. Check whether NSGA-III/SMS-EMOA need the same per-family qubit-
+2. Check whether NSGA-III/SMS-EMOA need the same per-family qubit-
    scaling fixes (statevector backend / raised echo-samples) that
    NSGA-II needed at n=16-20, or whether the noise-floor/entanglement
    problems there were NSGA-II-independent (fidelity backend choice,
    not block-optimizer choice, so likely yes -- not yet verified).
+3. SMS-EMOA has never been run with injection_method=sa at all (NSGA-III
+   now has, see "WHERE WE ARE" -- SMS-EMOA's sa gap predates that and
+   is a separate, still-open piece of the original research angle).
 4. Candidate next algorithm to add, in priority order: MOSA (a
    multi-objective version of the project's own simulated-annealing
    step -- cheapest, reuses existing code) > two more quality-score-

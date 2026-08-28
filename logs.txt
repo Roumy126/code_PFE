@@ -697,15 +697,51 @@ for nsga2/nsga3/smsemoa respectively on the profiled run, but that number
 is more exposed to cProfile-vs-wall-clock overhead skew than the isolated
 selection-only test above, so treat it as suggestive, not conclusive).
 
+nsga3 extended into the injection_method (sa vs. stochastic) comparison
+-- RESOLVED (2026-08-28 follow-up): ran the missing nsga3+sa configs (25
+runs, 5 circuits x 5 seeds, same point/no-hybrid-LAS/n=8 baseline as
+everything else in this section), 0 failed. table_injection_method_
+comparison/generate_report.py's injection_method figures were generalized
+from a hardcoded nsga2-only filter to group by [block_algorithm,
+injection_method] instead, so smsemoa's still-missing sa column (never run
+under smsemoa either -- pre-existing gap, not new) renders as an absent
+bar rather than crashing or erroring.
+  block_algorithm  injection_method  fidelity_final  wall_clock_s
+  nsga2             sa                       0.1465         37.17
+  nsga2             stochastic               0.1491         52.41
+  nsga3             sa                       0.1419         33.99
+  nsga3             stochastic               0.1419         25.34
+  smsemoa           stochastic               0.1230         50.95  (sa: no data)
+nsga3's per-seed fidelity_final is BIT-IDENTICAL between sa and stochastic
+(confirmed at full float precision, not just 4-decimal rounding) --
+consistent with the already-documented Phase 2/SCALING finding that
+fidelity_driven_injection's greedy pass dominates the final circuit
+regardless of --injection-method (injection_path_used was
+"fidelity_driven_greedy" in 25/25 nsga3+sa runs and 24/25 nsga3+stochastic
+runs). Not a bug -- nsga3 just reproduces the same known pipeline behavior
+nsga2 already showed.
+One genuinely new nuance: nsga3's sa/stochastic wall-clock RATIO inverts
+nsga2's. Under nsga2, sa (37.17s) is cheaper than stochastic (52.41s) --
+the original Phase 2 finding. Under nsga3, sa (33.99s) is now the SLOWER
+of the two (stochastic: 25.34s) -- because nsga3's own stochastic-path
+total wall-clock benefits from the same cheaper-selection root cause
+documented above (its block-optimization stage is ~2x faster regardless of
+injection method), but sa_injection's own per-run cost is roughly constant
+across block algorithms (~34-37s here) since it doesn't depend on which
+block optimizer produced the pre-injection circuit -- so the block-
+optimization-stage saving is large enough, relative to total wall-clock, to
+flip which injection method looks "cheaper overall" once paired with a
+faster block optimizer. Not a contradiction of either finding, a
+downstream consequence of both being true at once.
+
 Not done / open:
 - Whether swapping rank_by_front/environmental_select (SMS-EMOA) to use
   tools.sortLogNondominated instead of tools.sortNondominated would close
   most of the wall-clock gap to nsga3, confirming the root cause above is
   sufficient on its own -- not yet tried.
-- nsga3 not yet included in the injection_method (sa vs. stochastic)
-  comparison -- that axis was only ever run under nsga2 (see "SCALING" and
-  Phase 2 above), so this isn't a nsga3-specific gap, but worth noting it's
-  still nsga2-only.
+- smsemoa has never been run with injection_method=sa at all (predates
+  nsga3's extension above -- a pre-existing gap in the original SMS-EMOA
+  research angle, not something this follow-up introduced).
 - No combined best-of-both-axes run for nsga3 either (matching the existing
   "Not done" note on nsga2/smsemoa above -- each axis ablated independently
   by design, consistently across all 3 algorithms now).
