@@ -5,4 +5,5 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 runs/
+report/
 .pytest_cache/
