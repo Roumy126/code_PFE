@@ -34,7 +34,15 @@ WHERE WE ARE
   trade-offs at no extra cost; NSGA-III reaches close to NSGA-II's
   fidelity at roughly HALF the wall-clock cost and pairs best with
   the hybrid GA+LAS local search of the three (84% of seed-runs
-  improved, vs. NSGA-II's wash and SMS-EMOA's smaller gain). The best
+  improved, vs. NSGA-II's wash and SMS-EMOA's smaller gain). Root-
+  caused that speed difference the same day: it's DEAP's own default
+  choice of non-dominated-sorting algorithm for NSGA-III (an
+  asymptotically faster one than NSGA-II/SMS-EMOA's code both use),
+  confirmed by direct isolated timing (~5x cheaper selection call,
+  matching the real-run profile) -- an implementation detail of this
+  codebase's current setup, not evidence NSGA-III is a fundamentally
+  more efficient algorithm; report it that way, not as a general claim.
+  The best
   supporting settings (mutation operator, fine-tuning) turned out to
   differ per algorithm rather than being universal -- now confirmed
   across three algorithms, not two, strengthening that as a paper
@@ -61,19 +69,14 @@ WHERE WE ARE
 NEXT RESEARCH POINTS
 =====================================================================
 1. Start results write-up for the December submission.
-2. Root-cause why NSGA-III is ~2x cheaper than NSGA-II/SMS-EMOA at
-   n=8 (DEAP's selNSGA3 implementation cost vs. the others, or fewer
-   generations needed to converge at this problem size) before citing
-   it as a general "NSGA-III is cheaper" claim rather than an n=8
-   observation.
-3. Extend NSGA-III into the injection-method (sa vs. stochastic)
+2. Extend NSGA-III into the injection-method (sa vs. stochastic)
    comparison -- that axis has only ever been run under NSGA-II.
-4. Check whether NSGA-III/SMS-EMOA need the same per-family qubit-
+3. Check whether NSGA-III/SMS-EMOA need the same per-family qubit-
    scaling fixes (statevector backend / raised echo-samples) that
    NSGA-II needed at n=16-20, or whether the noise-floor/entanglement
    problems there were NSGA-II-independent (fidelity backend choice,
    not block-optimizer choice, so likely yes -- not yet verified).
-5. Candidate next algorithm to add, in priority order: MOSA (a
+4. Candidate next algorithm to add, in priority order: MOSA (a
    multi-objective version of the project's own simulated-annealing
    step -- cheapest, reuses existing code) > two more quality-score-
    based algorithms (IBEA, and a decomposition-based method) >

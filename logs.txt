@@ -17,8 +17,13 @@ Recent activity (newest first; section titles below have full detail):
   vs. nsga2's 16/25 wash and smsemoa's 18/25), and its mutation-scheme
   ranking is a THIRD distinct pattern (swap_add ~= point > swap_add_delete)
   from both nsga2's and smsemoa's -- reinforcing that no mutation operator is
-  universally best, now across 3 algorithms not 2. See "NSGA-III ADDED AS
-  THIRD PER-BLOCK OPTIMIZER" below for full numbers and what's still open.
+  universally best, now across 3 algorithms not 2. Root-caused the wall-clock
+  finding same day: DEAP's selNSGA3 defaults to an asymptotically faster
+  non-dominated sort than selNSGA2/the hand-rolled SMS-EMOA use -- a DEAP
+  implementation-default difference, not evidence NSGA-III is a
+  fundamentally faster algorithm; confirmed via isolated timing, not just
+  the real-run profile. See "NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER"
+  below for full numbers and what's still open.
 - Raised run_sweep.py's default qubit-size grid off its flat 8/12-qubit baseline
   via a real pilot run per family, at the sizes logs.txt itself had claimed were
   already a "practical ceiling" based on isolated fidelity-cost benchmarks. Found
@@ -622,11 +627,12 @@ methodology, an extension of the existing one. 100 new runs total (25 + 50
   wall-clock cost of either nsga2 or smsemoa (25.34s vs. 52.41s/50.95s) --
   a genuinely distinct trade-off point, not simply "better" or "worse" than
   either existing algorithm. Its Pareto front (92.20) sits between nsga2's
-  (121.84) and smsemoa's (171.72). Not yet root-caused why nsga3 is so much
-  faster here specifically (DEAP's selNSGA3 implementation cost vs.
-  selNSGA2/the hand-rolled hypervolume trim, or fewer generations needed to
-  converge at this problem size) -- worth checking before citing "nsga3 is
-  cheaper" as a general claim rather than an observation at n=8.
+  (121.84) and smsemoa's (171.72). Root-caused as a follow-up the same day
+  (see "Root cause of nsga3's speed in (a) — RESOLVED" below): DEAP's
+  selNSGA3 defaults to an asymptotically faster non-dominated sort than
+  selNSGA2/the hand-rolled SMS-EMOA use -- a DEAP implementation-default
+  difference, not evidence NSGA-III is inherently more efficient as an
+  algorithm. Report accordingly.
 
 (b) mutation ablation, now 3-way (fidelity_final):
   nsga2:   point 0.1491 > swap_add_delete 0.1293 > swap_add 0.1140
@@ -649,9 +655,53 @@ methodology, an extension of the existing one. 100 new runs total (25 + 50
   Consistent with (a)/(b)'s pattern of nsga3 being a distinct third point in
   the design space rather than interpolating between nsga2 and smsemoa.
 
+Root cause of nsga3's speed in (a) -- RESOLVED (2026-08-28 follow-up):
+Two independent measurements agree. (1) cProfile on a real block-optimizer
+call (matched seed, same 3-qubit block extracted from a real weak_random
+circuit, generations=100/pop_size=100 for all three): selNSGA2's cumulative
+time was 2.27-2.40s over 100-101 calls; SMS-EMOA's tools.sortNondominated
+(called TWICE per generation -- once in rank_by_front for mating-pool
+Pareto rank, once in environmental_select) totaled 2.82s over 201 calls;
+selNSGA3's cumulative time was only 0.07-0.19s over 100 calls. (2) A
+cProfile-free isolated timing test (tools.selNSGA2 / tools.selNSGA3 /
+tools.sortNondominated called directly, 100 trials, on matched synthetic
+200-individual populations with random 3-objective fitness values, so no
+confound from fitness evaluation or profiler overhead): selNSGA2 11.40
+ms/call (1.14s/100 gens), selNSGA3 2.16 ms/call (0.22s/100 gens, ~5.2x
+cheaper), sortNondominated 11.62 ms/call so SMS-EMOA's 2x/generation usage
+costs 23.20 ms/gen (2.32s/100 gens, ~10.5x nsga3's per-generation cost).
+Cause: DEAP's selNSGA3 defaults to nd="log" -- Fortin & Buzdalov's
+asymptotically faster non-dominated sort (O(N.log^(M-1)N),
+tools.sortLogNondominated), while selNSGA2 and this codebase's hand-rolled
+SMS-EMOA (rank_by_front + environmental_select) both call the classic
+O(M.N^2) tools.sortNondominated -- SMS-EMOA pays that cost twice per
+generation, which is why it isn't the cheapest of the three despite nsga3
+and smsemoa sharing similar total wall-clock in (a) (smsemoa's other
+per-generation work, e.g. hv_trim_boundary_front, must be correspondingly
+lighter to end up close to nsga2's total).
+IMPORTANT CAVEAT for how to report this: this is a DEAP default-parameter/
+implementation difference, NOT evidence that NSGA-III's algorithm is
+inherently more efficient than NSGA-II or SMS-EMOA as MOO algorithms.
+tools.sortLogNondominated is a standalone function DEAP exposes -- nothing
+stops rank_by_front/environmental_select (or a modified selNSGA2 substitute)
+from calling it instead of the classic sort, which would likely close most
+of this gap. Report "nsga3 is ~2x cheaper in this codebase's current
+implementation, due to its default non-dominated-sort algorithm" -- not
+"NSGA-III is a faster algorithm than NSGA-II/SMS-EMOA" as a general claim.
+Not investigated: how much of the remaining wall-clock gap (the isolated
+selection-only test explains roughly 0.9-2.1s of the ~4-5s real-run gap)
+comes from other main-process-only overhead (assignCrowdingDist for nsga2,
+or fewer/more individuals dispatched to joblib workers per generation --
+evaluate_population's own cProfile cumtime differed too, 8.59s/6.72s/6.16s
+for nsga2/nsga3/smsemoa respectively on the profiled run, but that number
+is more exposed to cProfile-vs-wall-clock overhead skew than the isolated
+selection-only test above, so treat it as suggestive, not conclusive).
+
 Not done / open:
-- No root-cause investigation of WHY nsga3 is ~2x cheaper in (a) -- see
-  above, worth doing before generalizing the claim past n=8.
+- Whether swapping rank_by_front/environmental_select (SMS-EMOA) to use
+  tools.sortLogNondominated instead of tools.sortNondominated would close
+  most of the wall-clock gap to nsga3, confirming the root cause above is
+  sufficient on its own -- not yet tried.
 - nsga3 not yet included in the injection_method (sa vs. stochastic)
   comparison -- that axis was only ever run under nsga2 (see "SCALING" and
   Phase 2 above), so this isn't a nsga3-specific gap, but worth noting it's
