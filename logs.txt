@@ -501,8 +501,8 @@ CIRCUIT_FIDELITY_SETTINGS now encode all of this as per-circuit defaults
 (see the 2026-08-28 entry above), so a plain `python run_sweep.py` sweeps
 every family through its own validated ceiling with the right fidelity
 settings applied automatically -- no per-family flags needed by hand.
-None of the four has been tried PAST its newly-validated size (qft n=32,
-qaoa_maxcut n=20) -- extending further needs its own pilot, the same way
+None of the four has been tried PAST its newly-validated size (qaoa_maxcut
+n=16, qft n=20) -- extending further needs its own pilot, the same way
 this round did, not an assumption that the same fix generalizes further;
 qaoa_maxcut specifically becomes memory-bound under statevector past
 roughly n=24-28 regardless.
@@ -653,13 +653,13 @@ are directly comparable to the existing nsga2/smsemoa rows -- not a new
 methodology, an extension of the existing one. 100 new runs total (25 + 50
 + 25), 0 failed:
 
-(a) algorithm comparison (mutation_scheme=point, hybrid_las=False), now 3-way:
+(a) algorithm comparison (mutation_scheme=point, hybrid_las=False), now 3-way
+  (nsga2/smsemoa rows unchanged from (a) in "RESEARCH ANGLE CHOSEN AND
+  IMPLEMENTED" above; nsga3 added):
   block_algorithm  fidelity_final  depth_after  cost_after  mean_hv  total_n_pareto  wall_clock_s
-  nsga2                    0.1491        16.04       82.12   0.0520          121.84       52.41
   nsga3                    0.1419        15.16       81.32   0.0462           92.20       25.34
-  smsemoa                  0.1230        15.20       78.24   0.0596          171.72       50.95
-  nsga3 reaches close to nsga2's fidelity (within ~5%) at roughly HALF the
-  wall-clock cost of either nsga2 or smsemoa (25.34s vs. 52.41s/50.95s) --
+  nsga3 reaches close to nsga2's fidelity (0.1491, within ~5%) at roughly HALF
+  the wall-clock cost of either nsga2 (52.41s) or smsemoa (50.95s) --
   a genuinely distinct trade-off point, not simply "better" or "worse" than
   either existing algorithm. Its Pareto front (92.20) sits between nsga2's
   (121.84) and smsemoa's (171.72). Root-caused as a follow-up the same day
@@ -669,26 +669,27 @@ methodology, an extension of the existing one. 100 new runs total (25 + 50
   difference, not evidence NSGA-III is inherently more efficient as an
   algorithm. Report accordingly.
 
-(b) mutation ablation, now 3-way (fidelity_final):
-  nsga2:   point 0.1491 > swap_add_delete 0.1293 > swap_add 0.1140
+(b) mutation ablation, now 3-way (fidelity_final; nsga2/smsemoa rankings
+  unchanged from (b) above):
   nsga3:   swap_add 0.1428 ~= point 0.1419 > swap_add_delete 0.1302
-  smsemoa: swap_add_delete 0.1420 > swap_add 0.1295 > point 0.1230
-  A THIRD distinct ranking, not a repeat of either existing one -- point and
-  swap_add are within noise of each other under nsga3 specifically, with
-  swap_add_delete clearly worst (the opposite of smsemoa's ranking, where
-  swap_add_delete is best). Strengthens the existing "no mutation operator
-  is universally best, it depends on the pairing algorithm" finding: now 3
-  algorithms, 3 different rankings, not a 2-algorithm coincidence.
+  A THIRD distinct ranking, not a repeat of either existing one (nsga2:
+  point > swap_add_delete > swap_add; smsemoa: swap_add_delete > swap_add >
+  point) -- point and swap_add are within noise of each other under nsga3
+  specifically, with swap_add_delete clearly worst (the opposite of
+  smsemoa's ranking, where swap_add_delete is best). Strengthens the
+  existing "no mutation operator is universally best, it depends on the
+  pairing algorithm" finding: now 3 algorithms, 3 different rankings, not a
+  2-algorithm coincidence.
 
-(c) hybrid GA+LAS ablation, now 3-way:
-  nsga2:   False 0.1491, True 0.1484 -- 16/25 improved (0.64), mean delta -0.0007 (a wash)
+(c) hybrid GA+LAS ablation, now 3-way (nsga2/smsemoa numbers unchanged from
+  (c) above):
   nsga3:   False 0.1419, True 0.1475 -- 21/25 improved (0.84), mean delta +0.0056
-  smsemoa: False 0.1230, True 0.1249 -- 18/25 improved (0.72), mean delta +0.0019
   nsga3 pairs BEST with hybrid LAS of the three algorithms -- both the
   highest improved-fraction and the largest mean fidelity_final gain,
-  clearly ahead of smsemoa's smaller-but-positive effect and nsga2's wash.
-  Consistent with (a)/(b)'s pattern of nsga3 being a distinct third point in
-  the design space rather than interpolating between nsga2 and smsemoa.
+  clearly ahead of smsemoa's smaller-but-positive effect (18/25 improved)
+  and nsga2's wash (16/25 improved). Consistent with (a)/(b)'s pattern of
+  nsga3 being a distinct third point in the design space rather than
+  interpolating between nsga2 and smsemoa.
 
 Root cause of nsga3's speed in (a) -- RESOLVED (2026-08-28 follow-up):
 Two independent measurements agree. (1) cProfile on a real block-optimizer
@@ -802,9 +803,9 @@ Not done / open:
   were validated under nsga2 only; whether nsga3 needs the same treatment
   at n=16/20 is unknown.
 - The "why is nsga3 faster" question above could matter for interpreting
-  the wall_clock_s column across the whole 422-row results_master.csv if it
-  turns out to be a per-block-count or per-generation effect rather than
-  algorithm-inherent.
+  the wall_clock_s column across the whole results_master.csv (472 rows as
+  of the 2026-08-28 smsemoa+sa addition) if it turns out to be a
+  per-block-count or per-generation effect rather than algorithm-inherent.
 
 =====================================================================
 HYPERVOLUME COMPARABILITY ACROSS ALGORITHMS (2026-08-28)
