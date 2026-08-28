@@ -58,11 +58,23 @@ python run_experiment.py --n-qubits 12 --seed 0 --generations 100 --pop-size 100
 #   hw_efficient_ansatz   generic hardware-efficient ansatz (H + ry/rz + linear cx; --ansatz-reps)
 python run_experiment.py --circuit qaoa_maxcut --n-qubits 8 --qaoa-p 2 --generations 100 --pop-size 100
 
+# --block-algorithm selects the per-block optimizer (default: nsga2):
+#   nsga2      DEAP NSGA-II (3 objectives: fidelity, depth, cost)
+#   smsemoa    hypervolume-driven SMS-EMOA (larger/more diverse Pareto fronts, similar
+#              wall-clock; doesn't strictly beat nsga2 on peak fidelity, see logs.txt)
+# --mutation-scheme (point / swap_add / swap_add_delete) and --hybrid-las (runs a
+# finite-difference local angle search on the GA's winner) are independent axes on
+# top of --block-algorithm; which combination wins depends on the pairing (see
+# logs.txt's "RESEARCH ANGLE CHOSEN AND IMPLEMENTED" for the ablation results).
+python run_experiment.py --circuit qft --n-qubits 8 --block-algorithm smsemoa \
+    --mutation-scheme swap_add_delete --hybrid-las --generations 100 --pop-size 100
+
 # Run a resumable multi-seed sweep over the fixed benchmark set (5 circuit families x
-# CIRCUIT_QUBIT_SIZES x injection method x seed; edit those constants at the top of the
-# file, or override via flags). Re-running the same command skips any run whose
-# runs/<run_id>/metrics.json already exists, so a laptop-scale sweep can be stopped and
-# resumed without losing progress or duplicating work.
+# CIRCUIT_QUBIT_SIZES x injection method x block algorithm x mutation scheme x
+# hybrid-LAS option x seed; edit the constants at the top of the file, or override via
+# flags). Re-running the same command skips any run whose runs/<run_id>/metrics.json
+# already exists, so a laptop-scale sweep can be stopped and resumed without losing
+# progress or duplicating work.
 python run_sweep.py --dry-run              # preview the grid without running anything
 python run_sweep.py --circuits weak_random qft --n-seeds 5
 
@@ -70,18 +82,26 @@ python run_sweep.py --circuits weak_random qft --n-seeds 5
 python aggregate_results.py
 ```
 
-Each run's `metrics.json` includes final fidelity/depth/cost, per-block MOO indicators (hypervolume, spread, spacing), a `stage_timings_s` breakdown (partitioning / block_optimization / injection / compression), which injection path actually produced the final circuit (`injection_path_used`, `fidelity_after_injection_method`, `fidelity_after_fidelity_driven_greedy` — the pipeline's greedy fallback pass often wins over the requested `--injection-method`, so these fields tell you which one you actually got), and which fidelity backend was used (`fidelity_backend`: `"exact"` or `"echo_test_mc"`, see below).
+Each run's `metrics.json` includes final fidelity/depth/cost, per-block MOO indicators (hypervolume, spread, spacing), a `stage_timings_s` breakdown (partitioning / block_optimization / injection / compression), which injection path actually produced the final circuit (`injection_path_used`, `fidelity_after_injection_method`, `fidelity_after_fidelity_driven_greedy` — the pipeline's greedy fallback pass often wins over the requested `--injection-method`, so these fields tell you which one you actually got), which fidelity backend was used at the reporting level (`fidelity_backend`: `"exact"`, `"echo_test_mc"`, or `"statevector_mc"`, see below), and which tier `fidelity_driven_injection`'s per-trial loop used (`fidelity_driven_tier`: `"exact"` / `"statevector"` / `"echo_test_mc"`).
 
-**Fidelity at scale:** the injection stage's fidelity checks run on the full circuit, which used to mean an exact dense-`Operator` computation that became intractable past ~10-12 qubits (a 12-qubit run once took over 1h45m before being killed). Circuits above `--fidelity-exact-threshold` (default 13) now use an approximate Monte-Carlo fidelity-echo estimate instead (`--fidelity-echo-samples`, default 8; `--fidelity-echo-shots`, default 128) — a proxy metric over random product states, not a full-Hilbert-space fidelity. This replaced an older SWAP-test formulation on 2026-08-27: same target quantity, but computed on `n` qubits instead of `2n+1` with no extra CSWAP-induced entanglement between two coupled registers, which used to make it exponentially expensive specifically for genuinely entangled circuit families (QAOA/QFT/W-state/hw-efficient-ansatz) regardless of qubit count. Benchmarked post-fix: `w_state`/`hw_efficient_ansatz` stay cheap (~0.05s/call) up to at least n=32; `qft` scales gently (~20s/call at n=32); `qaoa_maxcut` is the outlier and still gets expensive past ~n=16 (its ring+chord graph structure genuinely gets more entangled as n grows — not a software artifact). `--fidelity-driven-max-trials` (default 300, was hardcoded/not tunable before 2026-08-27) controls `fidelity_driven_injection`'s greedy pass, which runs unconditionally regardless of `--injection-method` and is now the dominant per-run cost for entangled families above `--injection-fidelity-exact-threshold` (confirmed: a real n=16 `qaoa_maxcut` run did not finish within 280s at the default 300 trials; finished in ~204s once both this and `--fidelity-echo-samples`/`--fidelity-echo-shots` were lowered) — lower these for large-n runs on entangled families. `--sa-iters` is likewise not auto-reduced above `--fidelity-exact-threshold` — lower it manually if using `--injection-method sa`. See `logs.txt`'s "SCALING" entries (search for that word) for the full history, including the specific fixes and their verification.
+**Fidelity at scale:** the injection stage's fidelity checks run on the full circuit, which used to mean an exact dense-`Operator` computation that became intractable past ~10-12 qubits (a 12-qubit run once took over 1h45m before being killed). Circuits above `--fidelity-exact-threshold` (default 13) now use an approximate Monte-Carlo estimate instead — by default the fidelity-echo estimator (`--fidelity-echo-samples`, default 8; `--fidelity-echo-shots`, default 128), a proxy metric over random product states rather than a full-Hilbert-space fidelity. This replaced an older SWAP-test formulation on 2026-08-27: same target quantity, but computed on `n` qubits instead of `2n+1` with no extra CSWAP-induced entanglement between two coupled registers, which used to make it exponentially expensive specifically for genuinely entangled circuit families (QAOA/QFT/W-state/hw-efficient-ansatz) regardless of qubit count. Benchmarked post-fix: `w_state`/`hw_efficient_ansatz` stay cheap (~0.05s/call) up to at least n=32; `qft` scales gently (~20s/call at n=32); `qaoa_maxcut` is the outlier and still gets expensive past ~n=16 (its ring+chord graph structure genuinely gets more entangled as n grows — not a software artifact).
+
+For `qaoa_maxcut`-like cases, pass `--fidelity-approximate-backend statevector` (default `mps`): an exact-per-sample, no-shot-noise estimator that's ~150x+ faster than the MPS-backed echo estimator for highly-entangled circuits at n=16, but 250-400x *slower* for low-entanglement families like `w_state`/`hw_efficient_ansatz` at n=24 — there's no auto-detection, pick the backend per circuit family. With it, a previously-timing-out n=20 `qaoa_maxcut` run completes in ~38s. `fidelity_driven_injection`'s own per-trial loop gets a similar exact-statevector fast path automatically up to `--fidelity-driven-statevector-threshold` (default 24) regardless of the reporting-level backend choice.
+
+`--fidelity-driven-max-trials` (default 300, was hardcoded/not tunable before 2026-08-27) controls `fidelity_driven_injection`'s greedy pass, which runs unconditionally regardless of `--injection-method` and is now the dominant per-run cost for entangled families above `--injection-fidelity-exact-threshold` — lower it for large-n runs on entangled families if not also using the statevector fast path above. `--sa-iters` is likewise not auto-reduced above `--fidelity-exact-threshold` — lower it manually if using `--injection-method sa` (though `sa` now has its own closed-form energy fast path and is typically the *cheaper* of the two injection methods on measured wall-clock, not the more expensive one). See `logs.txt`'s "SCALING" entries (search for that word) for the full history, including the specific fixes and their verification.
+
+Practical qubit ceiling as of 2026-08-27, approximate tier, default `--fidelity-approximate-backend mps`: `weak_random`/`w_state`/`hw_efficient_ansatz`/`qft` comfortably reach n=20-32+; `qaoa_maxcut` needs `--fidelity-approximate-backend statevector` to reach n=20 at all, and hasn't been tried past that at production GA settings (statevector itself becomes memory-bound past roughly n=24-28).
 
 **Parallelism:** per-block NSGA-II fitness evaluation (`optimise_block_nsga2`) always uses `joblib.Parallel(-1)` — all available cores, with no CLI knob to cap it. This is intentional: the runtime hardware's own thermal safety mechanisms handle CPU protection, so this software does not need to throttle its own usage.
 
 ## Project Structure
 - `AG_mono/`: Mono-objective implementations.
-- `NSGA-II/`: Multi-objective implementations.
+- `NSGA-II/`: Multi-objective implementation using DEAP's built-in NSGA-II.
+- `NSGA-III/`: Independently hand-rolled NSGA-III (Deb & Jain 2014 reference-point method, not DEAP's `selNSGA3`) — exists only on this branch (`ULBS_qiea`).
 - `Final_test/` & `final_test_AG/`: Validation scripts and performance tests.
 - `m1*/`, `m2*/`: Test modules for different types of circuit blocks.
-- `M1_finale/`: Canonical pipeline (partitioning, block-local NSGA-II, inter-block injection, compression) — see "Running experiments" above.
+- `M1_finale/`: Canonical pipeline (partitioning, block-local NSGA-II/SMS-EMOA, inter-block injection, compression) — see "Running experiments" above.
 - `run_experiment.py`, `run_sweep.py`, `aggregate_results.py`: CLI tooling for single runs, resumable multi-seed sweeps, and results aggregation.
 - `runs/`: Structured output of experiment runs (gitignored) — one directory per run, aggregated by `aggregate_results.py`.
 - `tests/`: Pytest smoke test for the pipeline (no broader test suite exists).
+- `logs.txt`: Full narrative project log (scaling history, research findings, ablation results). `status.txt`: latest supervisor-facing status snapshot. `moo.txt`: web-research notes on the wider Pareto-dominance MOO algorithm landscape.
