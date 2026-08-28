@@ -27,13 +27,16 @@ Example:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
+from pymoo.indicators.hv import HV as _PymooHV
 
 # Fixed categorical order (dataviz skill reference palette) -- assign by
 # identity/order, never re-cycle or reassign per chart.
@@ -106,6 +109,85 @@ def table_algorithm_comparison(df: pd.DataFrame) -> pd.DataFrame:
         wall_clock_s=("wall_clock_s", "mean"),
     ).reset_index()
     return g
+
+
+# The algorithm-comparison baseline's own circuits/algorithms/seed count (must match
+# table_algorithm_comparison's filter above) -- used to locate each run's metrics.json
+# directly, since raw Pareto-front points aren't (and shouldn't be) flattened into
+# results_master.csv's per-run summary row.
+FAIR_HV_CIRCUITS = ["weak_random", "qaoa_maxcut", "w_state", "qft", "hw_efficient_ansatz"]
+FAIR_HV_ALGORITHMS = ["nsga2", "smsemoa", "nsga3"]
+FAIR_HV_N_SEEDS = 5
+# Shared, FIXED reference point in normalized objective space -- the whole point of this
+# table. Matches this codebase's existing "+0.1 margin past the worst point" convention
+# (see evaluate_run in final_m1_script.py), just made shared across algorithms instead of
+# adaptively re-derived per run, which is what makes results_master.csv's own mean_hv
+# non-comparable across algorithms (see logs.txt's "HYPERVOLUME COMPARABILITY" entry).
+FAIR_HV_REF_POINT = np.array([1.1, 1.1, 1.1])
+
+
+def _normalize_shared(costs: np.ndarray, f_min: np.ndarray, f_max: np.ndarray) -> np.ndarray:
+    denom = f_max - f_min
+    denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
+    return (costs - f_min) / denom
+
+
+def table_fair_hv_comparison(runs_dir: Path) -> pd.DataFrame:
+    """Cross-algorithm-comparable hypervolume, computed from raw Pareto-front points
+    (metrics.json's front_raw field, added 2026-08-28 specifically to make this table
+    possible) instead of results_master.csv's mean_hv, which uses a private per-run
+    reference point and normalization -- valid for tracking one run's own convergence,
+    NOT for ranking algorithms against each other (verified: nsga2 ranks above nsga3
+    under the adaptive scheme on real data, but nsga3 ranks above nsga2 on the same
+    matched front under this fixed-reference scheme -- see logs.txt).
+
+    For each (circuit, seed) with front_raw data from >=2 algorithms, pools all present
+    algorithms' front points PER BLOCK INDEX (blocks are identical across algorithms for
+    a given circuit+seed, since partitioning happens before block_algorithm is chosen),
+    derives ONE shared min/max normalization from that pooled set, and evaluates each
+    algorithm's HV against the one shared FAIR_HV_REF_POINT.
+    """
+    rows = []
+    n_mismatched = 0
+    for circuit in FAIR_HV_CIRCUITS:
+        for seed in range(FAIR_HV_N_SEEDS):
+            per_algo_blocks = {}
+            for algo in FAIR_HV_ALGORITHMS:
+                run_id = f"{circuit}_8q_stochastic_{algo}_point_las0_g100_p100_seed{seed}"
+                metrics_path = runs_dir / run_id / "metrics.json"
+                if not metrics_path.exists():
+                    continue
+                blocks = json.loads(metrics_path.read_text()).get("moo_metrics_per_block", [])
+                if blocks and all("front_raw" in b and b["front_raw"] for b in blocks):
+                    per_algo_blocks[algo] = blocks
+            if len(per_algo_blocks) < 2:
+                continue
+            n_blocks_seen = {len(v) for v in per_algo_blocks.values()}
+            if len(n_blocks_seen) != 1:
+                n_mismatched += 1
+                continue
+            for b in range(n_blocks_seen.pop()):
+                per_algo_costs = {}
+                for algo, blocks in per_algo_blocks.items():
+                    front = np.array(blocks[b]["front_raw"])
+                    costs = front.copy(); costs[:, 0] = 1.0 - costs[:, 0]  # minimize convention, matches evaluate_run
+                    per_algo_costs[algo] = costs
+                pooled = np.vstack(list(per_algo_costs.values()))
+                f_min, f_max = pooled.min(axis=0), pooled.max(axis=0)
+                for algo, costs in per_algo_costs.items():
+                    hv = _PymooHV(ref_point=FAIR_HV_REF_POINT)(_normalize_shared(costs, f_min, f_max))
+                    rows.append({"circuit": circuit, "seed": seed, "block": b, "block_algorithm": algo, "fair_hv": hv})
+    if n_mismatched:
+        print(f"⚠️ table_fair_hv_comparison: skipped {n_mismatched} (circuit, seed) groups "
+              f"with mismatched block counts across algorithms")
+    detail = pd.DataFrame(rows)
+    if detail.empty:
+        return pd.DataFrame(columns=["block_algorithm", "n_runs", "fair_mean_hv"])
+    per_run = detail.groupby(["circuit", "seed", "block_algorithm"])["fair_hv"].mean().reset_index()
+    return per_run.groupby("block_algorithm").agg(
+        n_runs=("fair_hv", "count"),
+        fair_mean_hv=("fair_hv", "mean"),
+    ).reset_index()
 
 
 def table_mutation_ablation(df: pd.DataFrame) -> pd.DataFrame:
@@ -269,6 +351,9 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--input", default="runs/results_master.csv", type=Path)
     p.add_argument("--out-dir", default="report", type=Path)
+    p.add_argument("--runs-dir", default="runs", type=Path,
+                    help="Used only by table_fair_hv_comparison, which reads metrics.json "
+                         "files directly for their raw Pareto-front points.")
     args = p.parse_args(argv)
 
     if not args.input.exists():
@@ -283,6 +368,7 @@ def main(argv=None):
 
     tables = {
         "algorithm_comparison": table_algorithm_comparison(df),
+        "fair_hv_comparison": table_fair_hv_comparison(args.runs_dir),
         "mutation_ablation": table_mutation_ablation(df),
         "hybrid_las_ablation": table_hybrid_las_ablation(df),
         "injection_method_comparison": table_injection_method_comparison(df),
@@ -300,8 +386,18 @@ def main(argv=None):
     algo = tables["algorithm_comparison"].set_index("block_algorithm")
     fig_bar(algo["fidelity_final"], title="Fidelity by block algorithm", ylabel="fidelity_final",
             out_path=figures_dir / "algorithm_fidelity.png")
-    fig_bar(algo["mean_hv"], title="Hypervolume by block algorithm", ylabel="mean_hv",
-            out_path=figures_dir / "algorithm_hypervolume.png")
+
+    # Two SEPARATE figures, not one combined chart -- adaptive HV (~0.05) and fair HV
+    # (~0.9-1.0, a shared-reference scale) differ by ~20x in magnitude for unrelated
+    # reasons (see table_fair_hv_comparison's docstring), so plotting them on one shared
+    # axis would visually imply "fair is bigger/better", which is not a real comparison
+    # -- only each figure's OWN cross-algorithm ranking is meaningful.
+    fig_bar(algo["mean_hv"], title="Hypervolume (adaptive per-run reference -- NOT\ncomparable across algorithms, see logs.txt)",
+            ylabel="mean_hv", out_path=figures_dir / "algorithm_hypervolume.png")
+    if not tables["fair_hv_comparison"].empty:
+        fair_hv = tables["fair_hv_comparison"].set_index("block_algorithm")["fair_mean_hv"]
+        fig_bar(fair_hv, title="Hypervolume (fair: shared fixed reference point)",
+                ylabel="fair_mean_hv", out_path=figures_dir / "algorithm_hypervolume_fair.png")
 
     fig_grouped_bar(tables["mutation_ablation"], x="mutation_scheme", hue="block_algorithm",
                      y="fidelity_final", title="Mutation-scheme ablation",
@@ -324,7 +420,7 @@ def main(argv=None):
                        ylabel="fidelity_final", out_path=figures_dir / "scaling_fidelity.png")
 
     print(f"✅ Wrote {len(tables)} tables -> {tables_dir}/ (+ summary.md)")
-    print(f"✅ Wrote 8 figures -> {figures_dir}/")
+    print(f"✅ Wrote {len(list(figures_dir.glob('*.png')))} figures -> {figures_dir}/")
     return 0
 
 

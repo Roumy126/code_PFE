@@ -814,7 +814,16 @@ def evaluate_run(F: np.ndarray, P_star: Optional[np.ndarray] = None, ref_point: 
     P_eval, f_min, f_max = normalize_objectives(costs) if normalize else (costs, None, None)
     P_eval = P_eval[idx]
     ref = ref_point if ref_point is not None else (np.max(P_eval, axis=0) + 0.1)
-    res.update({"HV": compute_hv(P_eval, ref), "Spread": spread_delta(P_eval), "Spacing": compute_spacing(P_eval), "ref_point": ref})
+    # front_raw: the Pareto front's (fidelity, depth, cost) in natural units, unnormalized.
+    # HV/ref_point above use per-run adaptive normalization (f_min/f_max and the reference
+    # point are both derived from THIS run's own population), which makes them valid for
+    # tracking one run's own convergence (plot_moo_history) but NOT comparable across
+    # different runs/algorithms -- two algorithms with differently-scaled fronts get
+    # different private [0,1] coordinate systems. front_raw lets a caller recompute HV
+    # under a single SHARED normalization + fixed reference point across multiple runs
+    # for a fair comparison (see generate_report.py's table_fair_hv_comparison).
+    res.update({"HV": compute_hv(P_eval, ref), "Spread": spread_delta(P_eval), "Spacing": compute_spacing(P_eval),
+                "ref_point": ref, "front_raw": F[idx].tolist()})
     if P_star is not None:
         P_star_min = P_star.copy(); P_star_min[:, 0] = 1.0 - P_star_min[:, 0]
         P_star_eval = normalize_objectives(P_star_min, f_min, f_max)[0] if normalize else P_star_min

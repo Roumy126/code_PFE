@@ -3,6 +3,18 @@ Generated: 2026-08-18
 Last updated: 2026-08-28
 
 Recent activity (newest first; section titles below have full detail):
+- Root-caused a supervisor question about why nsga3's hypervolume is lower
+  than nsga2's: evaluate_run's HV uses a PER-RUN ADAPTIVE reference point
+  and normalization, not comparable across algorithms (same mechanism
+  already flagged once before for swap_add's outlier HV). Added a
+  "front_raw" field to evaluate_run's output and a new fair, shared-fixed-
+  reference HV table to generate_report.py; regenerated the 75-run
+  algorithm-comparison baseline to get the new field. Honest result:
+  nsga2-vs-smsemoa ranking FLIPS under the fair metric (proving the
+  adaptive one distorts comparisons), but nsga2-vs-nsga3's gap only
+  SHRINKS (11.2% -> 6.4%), it doesn't vanish -- nsga3's front is genuinely
+  somewhat smaller even when compared fairly. See "HYPERVOLUME
+  COMPARABILITY ACROSS ALGORITHMS" below.
 - Added NSGA-III (Deb & Jain 2014, DEAP's built-in tools.selNSGA3) as a third
   per-block optimizer alongside NSGA-II/SMS-EMOA, dispatched through a new
   BLOCK_OPTIMIZERS registry dict in final_m1_script.py instead of an if/elif
@@ -753,6 +765,105 @@ Not done / open:
   the wall_clock_s column across the whole 422-row results_master.csv if it
   turns out to be a per-block-count or per-generation effect rather than
   algorithm-inherent.
+
+=====================================================================
+HYPERVOLUME COMPARABILITY ACROSS ALGORITHMS (2026-08-28)
+=====================================================================
+Supervisor question, prompted by the algorithm_hypervolume.png figure:
+why is nsga3's mean_hv (0.0462) lower than nsga2's (0.0520) -- shouldn't
+higher hypervolume mean a better Pareto front? Correct in general, but
+NOT valid to conclude from this codebase's mean_hv as computed, and this
+needed checking properly rather than answered from intuition alone.
+
+Root cause: evaluate_run (final_m1_script.py) computes HV with a PER-RUN
+ADAPTIVE reference point AND normalization -- f_min/f_max come from that
+run's own final population (normalize_objectives(costs)), and the
+reference point defaults to that run's own normalized front's worst point
+plus a fixed margin (ref = np.max(P_eval, axis=0) + 0.1). Every run
+effectively gets its own private [0,1]-ish coordinate system and its own
+reference point. This is fine for tracking ONE run's convergence across
+generations (plot_moo_history's use case, and what this code was written
+for) but invalid for ranking DIFFERENT algorithms against each other --
+the same absolute hypervolume number means something different depending
+on how that particular run's own population happened to spread out. This
+is the same underlying mechanism already flagged once before, for a
+different pair, in "RESEARCH ANGLE CHOSEN AND IMPLEMENTED" above:
+"swap_add's outlier mean_hv ... is a per-run-normalization/bloat artifact,
+not a real front-quality win."
+
+Fix: added a "front_raw" field to evaluate_run's returned dict -- the
+Pareto front's (fidelity, depth, cost) in natural, unnormalized units
+(F[idx], i.e. literally the original per-individual fitness values of the
+non-dominated set) -- purely additive, does not change HV/Spread/Spacing/
+ref_point's existing (adaptive, in-loop) behavior at all. This flows
+through automatically into metrics.json's moo_metrics_per_block (no other
+pipeline change needed) since that's already just whatever evaluate_run's
+last-generation call returns. Verified via pytest (15/15 still pass) and a
+real run's metrics.json (front_raw present, correct natural-unit values).
+
+Added generate_report.py's table_fair_hv_comparison: for each (circuit,
+seed) with front_raw from >=2 algorithms, pools all present algorithms'
+front points PER BLOCK INDEX (blocks are identical across algorithms for
+the same circuit+seed -- partitioning happens before block_algorithm is
+chosen), derives ONE shared min/max normalization from the pooled points,
+and evaluates each algorithm's HV against ONE shared FIXED reference point
+([1.1, 1.1, 1.1] in normalized space -- same "+0.1 margin past the worst
+point" convention as the adaptive version, just made shared rather than
+per-run). Required regenerating metrics.json for the 75-run algorithm-
+comparison baseline (nsga2/smsemoa/nsga3 x 5 circuits x 5 seeds) so those
+files would carry front_raw -- the existing 75 were moved to
+runs_backup_pre_front_raw/ (not deleted; a bulk rm -rf was blocked by the
+permission classifier, and moving aside was the safer choice anyway) and
+re-run via run_sweep.py, 0 failed, deterministic (same seeds -> same
+optimization outcome, only the metrics.json schema gained a field).
+
+Result, on the full 25-seed comparison (not just a single matched-block
+spot-check, which was tried first and turned out to be too small a sample
+to trust -- see below):
+  block_algorithm  mean_hv (adaptive)  fair_mean_hv (shared reference)
+  nsga2                        0.0520                           0.8149
+  nsga3                        0.0462                           0.7630
+  smsemoa                      0.0596                           0.8081
+Two distinct things happen under the fair metric, and both matter:
+1. nsga2-vs-smsemoa RANKING FLIPS: smsemoa looks best under the adaptive
+   metric (0.0596 > 0.0520), but nsga2 is marginally ahead under the fair
+   one (0.8149 > 0.8081, an ~0.8% margin -- essentially a tie, but the
+   DIRECTION is reversed). Direct proof the adaptive metric distorts
+   cross-algorithm comparisons for a pair that was never even in question.
+2. nsga2-vs-nsga3 GAP SHRINKS BUT DOES NOT DISAPPEAR: adaptive relative
+   gap is 11.2% ((0.0520-0.0462)/0.0520); fair relative gap is 6.4%
+   ((0.8149-0.7630)/0.8149). So the honest conclusion is NOT "it was just
+   a normalization bug, ignore it" -- nsga3 genuinely has a somewhat
+   smaller fair hypervolume than nsga2 even under a comparable metric,
+   consistent with its smaller total_n_pareto (92.20 vs nsga2's 121.84 --
+   see "NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER" above). The adaptive
+   metric exaggerated a real but smaller gap for this pair, while getting
+   a different pair's ranking (nsga2 vs smsemoa) backwards entirely.
+An earlier single-block, single-seed spot-check (matched seed, one
+extracted weak_random block, generations=100/pop_size=100) had suggested
+the nsga2-vs-nsga3 ranking might fully REVERSE under fair comparison
+(0.919 vs 1.015) -- the full 25-seed result shows that was small-sample
+noise, not the real pattern. Lesson: a single matched-seed check is good
+for confirming a MECHANISM exists (it correctly showed the adaptive metric
+is not comparable), but not reliable for the actual magnitude/direction of
+a cross-algorithm gap -- that needs the full dataset.
+Report fidelity_final (directly comparable: same target unitary, same
+metric definition, no adaptive normalization) as the primary cross-
+algorithm metric going forward; report mean_hv only with the adaptive-
+scheme caveat, or fair_mean_hv when a hypervolume comparison specifically
+is needed.
+
+Not done / open:
+- fair_hv_comparison only covers the 75-run algorithm-comparison baseline
+  (point mutation, no hybrid-LAS, stochastic injection, n=8) -- not
+  computed for the mutation-scheme or hybrid-LAS ablations, which would
+  need the same front_raw data (those runs predate this fix and would
+  need regenerating too, same as the baseline was).
+- No investigation of WHY nsga3's front is genuinely smaller under fair
+  comparison (not just adaptively-distorted) -- e.g. whether its
+  reference-point niching (Das & Dennis) converges to fewer distinct
+  non-dominated solutions at this population size/objective count by
+  design, versus NSGA-II's crowding distance actively rewarding spread.
 
 =====================================================================
 FRAMEWORK/DEPENDENCY AUDIT (2026-08-18)

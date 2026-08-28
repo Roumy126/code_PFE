@@ -69,6 +69,19 @@ WHERE WE ARE
   (different fix needed per family -- no single setting worked for
   all), validated with real reruns. Scaling fixes were validated
   under NSGA-II only so far -- not yet re-checked for NSGA-III/SMS-EMOA.
+- A supervisor question ("why is NSGA-III's hypervolume lower than
+  NSGA-II's?") uncovered a real measurement problem: the hypervolume
+  metric was computed with a per-run adaptive reference point/
+  normalization, not a shared one, so it was never actually valid to
+  compare across algorithms. Fixed by adding raw Pareto-front points to
+  the saved metrics and a new fair (shared fixed reference) hypervolume
+  table. Honest result on the full dataset: the NSGA-II-vs-SMS-EMOA
+  ranking flips under the fair metric (proof the old one was
+  distorting comparisons), but NSGA-III's hypervolume gap to NSGA-II
+  only shrinks (11.2% -> 6.4%), it doesn't disappear -- NSGA-III's
+  front is genuinely a bit smaller even when compared fairly. Report
+  fidelity_final (already directly comparable) as the primary metric
+  going forward; report hypervolume only via the new fair table.
 - Did a literature check of the wider multi-objective algorithm field
   to confirm SMS-EMOA was a reasonable choice and nothing better-
   suited was missed. Nothing displaces the existing plan.
@@ -85,7 +98,11 @@ NEXT RESEARCH POINTS
 3. SMS-EMOA has never been run with injection_method=sa at all (NSGA-III
    now has, see "WHERE WE ARE" -- SMS-EMOA's sa gap predates that and
    is a separate, still-open piece of the original research angle).
-4. Candidate next algorithm to add, in priority order: MOSA (a
+4. Extend the fair hypervolume comparison to the mutation-scheme and
+   hybrid-LAS ablations too (currently only covers the plain
+   algorithm-comparison baseline) -- needs regenerating those runs'
+   metrics.json the same way the baseline was.
+5. Candidate next algorithm to add, in priority order: MOSA (a
    multi-objective version of the project's own simulated-annealing
    step -- cheapest, reuses existing code) > two more quality-score-
    based algorithms (IBEA, and a decomposition-based method) >
