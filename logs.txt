@@ -1,8 +1,17 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 Recent activity (newest first; section titles below have full detail):
+- Raised run_sweep.py's default qubit-size grid off its flat 8/12-qubit baseline
+  via a real pilot run per family, at the sizes logs.txt itself had claimed were
+  already a "practical ceiling" based on isolated fidelity-cost benchmarks. Found
+  those benchmarks never checked whether the reported fidelity is actually
+  informative, nor exercised a real run's reinjection-gate count: 3 of 4 families
+  hit the fidelity estimator's shot-noise floor (reported ~0 despite completing
+  fine), and qft additionally never finished at all (killed after 47+ minutes).
+  Root-caused and fixed per family; validated with real reruns. See "SCALING"
+  below (2026-08-28 entry) for the full pilot results and the fix.
 - Scaling: replaced the injection stage's SWAP-test fidelity backend with a
   cheaper equivalent "fidelity-echo" method, cached redundant operator
   rebuilds, exposed fidelity_driven_injection's trial count as a tunable
@@ -375,28 +384,72 @@ Timeline of what was found and fixed:
   previously timed out even with reduced injection settings now
   completes in 37.8s with --fidelity-approximate-backend statevector.
 
-Current practical qubit ceiling (approximate-tier, injection-stage
-defaults, --fidelity-approximate-backend mps): weak_random / w_state /
-hw_efficient_ansatz / qft comfortably handle n=20-32+. qaoa_maxcut needs
---fidelity-approximate-backend statevector (plus --fidelity-driven-
-statevector-threshold, on by default) to reach n=20 at all -- with both,
-n=20 runs in well under a minute at tiny GA settings; not yet tried at
-production GA settings or past n=20 (statevector itself becomes memory-
-bound past roughly n=24-28).
-run_sweep.py's CIRCUIT_QUBIT_SIZES is still capped at [8] for every
-circuit — a conservative baseline default now, not a technical limit —
-left unchanged since raising it is a real methodology decision, not a
-side effect of a backend fix. It also has no axis for
-fidelity_approximate_backend yet, so a qaoa_maxcut sweep past n=13
-would need it added or run via run_experiment.py directly.
+- 2026-08-28: raised run_sweep.py's CIRCUIT_QUBIT_SIZES grid off its flat
+  8/12-qubit baseline via a real pilot (1 seed per family at its
+  logs.txt-claimed "n=20-32+ ceiling" -- n=16 for qaoa_maxcut) instead of
+  editing the grid on the strength of the cost benchmarks above, which never
+  checked whether the reported fidelity is actually informative, nor
+  exercised the injection stage's real reinjection-gate count. Every family
+  but weak_random failed the pilot, each for a different reason: w_state
+  @n=20, hw_efficient_ansatz @n=20, and qaoa_maxcut @n=16 all completed fine
+  (fast) but at or below approximate_gate_fidelity_echo_mc's exact
+  resolution floor (1/(samples*shots) = 1/1024 at defaults) -- w_state hit
+  0.000977 (one lucky shot landing exactly at the floor), the other two hit
+  exactly 0.0 (no lucky hit, indistinguishable from a genuinely zero
+  fidelity). qft @n=20 didn't even complete: killed after 47+ minutes with
+  no result. Root cause there was different again -- qft's Fourier-transform
+  structure is inherently globally-entangling, so partitioning it left 180
+  cross-block gates to reinject (vs. 3-20 for the other families), and its
+  pipeline-level reporting fidelity checks hit the same MPS/entanglement
+  wall qaoa_maxcut needed the statevector-backend opt-in for at n=20 (see
+  2026-08-27 entry above) -- qft just wasn't previously known to need it
+  too, since the isolated per-family cost benchmarks happened to use
+  circuit pairs that didn't expose it.
+  Fixed per family, validated with real reruns (not assumed from cost
+  alone): qaoa_maxcut and qft switched to --fidelity-approximate-backend
+  statevector (entanglement-agnostic and exact per-sample -- fixes both the
+  wall-clock and, for qaoa_maxcut, the floor, since it has no shot noise at
+  all); w_state and hw_efficient_ansatz instead got
+  --fidelity-echo-samples/--fidelity-echo-shots raised 8->32 / 128->2048
+  (lowers the floor to 1/65536 -- their low entanglement means MPS itself
+  was never the problem there, so no need to pay statevector's cost).
+  Results: qaoa_maxcut@16 91.7s (was 236-256s) with fidelity_final=2.2e-05
+  (was 0.0); qft@20 354.0s (was a 47+ min kill, no result) with
+  fidelity_final=6.7e-05; w_state@20 226.3s (was ~60-70s) with
+  fidelity_final=9.2e-05 (was 0.000977, i.e. still floor); hw_efficient_
+  ansatz@20 204.6s (was ~50-60s) with fidelity_final=3.2e-04 (was 0.0).
+  Wired into run_sweep.py as a new per-circuit CIRCUIT_FIDELITY_SETTINGS
+  dict, applied ONLY above fidelity_exact_threshold (13) -- an early version
+  of this fix applied the settings unconditionally regardless of qubit
+  size, which would have silently duplicated the existing n=8/12 data under
+  new suffixed run_ids; caught by a smoke test before landing, not by
+  inspection. CIRCUIT_QUBIT_SIZES is now weak_random=[8,12,20],
+  qaoa_maxcut=[8,12,16], w_state/qft/hw_efficient_ansatz=[8,12,20] (150
+  configs for a plain `python run_sweep.py`).
+
+Current practical qubit ceiling (2026-08-28, validated by real production
+pilot reruns per family, not cost benchmarks alone): weak_random reaches
+n=20 at run_experiment.py's plain defaults. w_state and hw_efficient_ansatz
+reach n=20 with --fidelity-echo-samples 32 --fidelity-echo-shots 2048
+(needed for resolution, not speed -- MPS stays fast for both). qaoa_maxcut
+(n=16) and qft (n=20) need --fidelity-approximate-backend statevector
+(needed for both speed and, for qaoa_maxcut, resolution -- their
+entanglement is what MPS chokes on). run_sweep.py's CIRCUIT_QUBIT_SIZES and
+CIRCUIT_FIDELITY_SETTINGS now encode all of this as per-circuit defaults
+(see the 2026-08-28 entry above), so a plain `python run_sweep.py` sweeps
+every family through its own validated ceiling with the right fidelity
+settings applied automatically -- no per-family flags needed by hand.
+None of the four has been tried PAST its newly-validated size (qft n=32,
+qaoa_maxcut n=20) -- extending further needs its own pilot, the same way
+this round did, not an assumption that the same fix generalizes further;
+qaoa_maxcut specifically becomes memory-bound under statevector past
+roughly n=24-28 regardless.
 
 Not done / open:
 - injection_fidelity_exact_threshold (12, kept below fidelity_exact_
   threshold's 13 specifically to dodge the old slow SWAP test) has not
   been re-benchmarked against the new echo-test/statevector backends and
   may be raisable.
-- run_sweep.py doesn't expose fidelity_approximate_backend as a sweep
-  axis or CLI override yet (see above).
 - Not attempted: pushing qaoa_maxcut past ~n=24-28, where statevector
   itself becomes memory-bound regardless of entanglement -- classical-
   shadow/tensor-network fidelity estimation (item 3 below) is the more

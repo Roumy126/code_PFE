@@ -11,10 +11,13 @@ rest of the sweep and no run leaks state (matplotlib figures, DEAP's
 
 The grid below is the Phase 2 "fixed benchmark set": all five circuit
 generators wired into run_experiment.py's CIRCUIT_GENERATORS, each swept at
-a couple of sizes below the fidelity exact_threshold (10) plus one above it
-to exercise the approximate Monte-Carlo SWAP-test fidelity path -- edit
-CIRCUITS / CIRCUIT_QUBIT_SIZES / INJECTION_METHODS / N_SEEDS directly, or
-use the CLI overrides.
+sizes spanning the exact-fidelity tier (8), the approximate tier just above
+the injection-stage fast paths (12), and each family's own pilot-validated
+ceiling (16 for qaoa_maxcut, 20 for the other four) -- see CIRCUIT_QUBIT_SIZES
+and CIRCUIT_FIDELITY_SETTINGS below for what each family's ceiling needed
+(a different fidelity-backend/sample/shot setting per family, not a single
+global default) and why -- edit CIRCUITS / CIRCUIT_QUBIT_SIZES / INJECTION_
+METHODS / N_SEEDS directly, or use the CLI overrides.
 
 Example:
     python run_sweep.py --dry-run
@@ -71,24 +74,58 @@ signal.signal(signal.SIGINT, _handle_terminate)
 
 CIRCUITS = ["weak_random", "qaoa_maxcut", "w_state", "qft", "hw_efficient_ansatz"]
 
-# Per-circuit qubit sizes. Still capped at 8 here as a conservative baseline default,
-# NOT a hard technical limit any more -- kept unchanged so a plain `python run_sweep.py`
-# stays behavior-unchanged (this project's convention: sweep defaults only change when
-# explicitly decided, not silently). Since the original "SCALING — DEFERRED" 8-qubit
-# decision, real pilot sweeps (via --n-qubits overrides, not by editing this dict) have
-# established n=12/13 as practical for all 5 families (2026-08-26 injection-stage fixes),
-# and n=16-32 as practical for 4 of the 5 (weak_random/w_state/hw_efficient_ansatz/qft) --
-# qaoa_maxcut remains genuinely expensive past ~n=16 even after the 2026-08-27 fidelity-
-# backend fix (see logs.txt's "SCALING — ECHO-TEST FIDELITY BACKEND REPLACES SWAP TEST"),
-# and needs --fidelity-driven-max-trials / --fidelity-echo-samples / --fidelity-echo-shots
-# lowered to stay tractable at those sizes. See logs.txt's "SCALING" entries for the full
-# history. Pass --n-qubits to override for a one-off run.
+# Per-circuit qubit sizes. weak_random reaches n=20 with run_experiment.py's plain
+# defaults (fidelity_final=0.628, ~150-170s -- a real pilot-confirmed signal). The
+# other four families' n=20 (n=16 for qaoa_maxcut) needed CIRCUIT_FIDELITY_SETTINGS
+# below FIRST (2026-08-28) -- at plain defaults every one of them either hit the
+# echo-test MC estimator's shot-noise floor (w_state: 0.000977 = 1/(8 samples x 128
+# shots) exactly; hw_efficient_ansatz/qaoa_maxcut: 0.0, no lucky hit) or, for qft,
+# never finished at all (killed after 47+ min -- its Fourier-transform structure is
+# inherently globally-entangling, so partitioning it left 180 cross-block gates to
+# reinject vs. 3-20 for the others, and its reporting-level fidelity checks hit the
+# same MPS/entanglement wall qaoa_maxcut needed the statevector backend for). None
+# of this was caught by wall-clock cost alone -- see CIRCUIT_FIDELITY_SETTINGS for
+# the fix each family needed and the validated numbers after it. Pass --n-qubits to
+# override for a one-off run at a different size.
 CIRCUIT_QUBIT_SIZES = {
-    "weak_random": [8],
-    "qaoa_maxcut": [8],
-    "w_state": [8],
-    "qft": [8],
-    "hw_efficient_ansatz": [8],
+    "weak_random": [8, 12, 20],
+    "qaoa_maxcut": [8, 12, 16],
+    "w_state": [8, 12, 20],
+    "qft": [8, 12, 20],
+    "hw_efficient_ansatz": [8, 12, 20],
+}
+
+# Per-circuit overrides for run_experiment.py's fidelity-estimation flags, layered
+# in ON TOP OF its own defaults (fidelity_approximate_backend="mps", fidelity_echo_
+# samples=8, fidelity_echo_shots=128) -- keys omitted here just mean "use the
+# default". Only matters above fidelity_exact_threshold (13); a no-op for the n=8/12
+# sizes every family also sweeps, so it can't change already-collected data there.
+#
+# Each entry was chosen from a real pilot run at that family's new qubit-size
+# ceiling (2026-08-28), not assumed from logs.txt's isolated fidelity-cost
+# benchmarks -- see CIRCUIT_QUBIT_SIZES's comment for what went wrong without this:
+#   - qaoa_maxcut (n=16), qft (n=20): entanglement, not shot noise, was the problem
+#     (qft's 180 cross-block gates especially) -- the statevector backend fixed
+#     both the wall-clock AND, for qaoa_maxcut, the floor-clipping, since it's exact
+#     per-sample (no shot noise) as well as entanglement-agnostic. Validated: qaoa_
+#     maxcut@16 now 91.7s (was 236-256s under mps) with fidelity_final=2.2e-05 (was
+#     0.0); qft@20 now 354.0s (was a 47+ min kill) with fidelity_final=6.7e-05.
+#   - w_state, hw_efficient_ansatz (n=20): these stay cheap under mps (their low
+#     entanglement is exactly what it's good at, per logs.txt's SCALING section) --
+#     the problem here was purely shot-noise resolution, so raising samples/shots
+#     (8->32, 128->2048, lowering the floor from 1/1024 to 1/65536) was the cheaper
+#     fix vs. switching backends. Validated: w_state@20 now 226.3s (was ~60-70s)
+#     with fidelity_final=9.2e-05 (was 0.000977, i.e. still floor); hw_efficient_
+#     ansatz@20 now 204.6s (was ~50-60s) with fidelity_final=3.2e-04 (was 0.0).
+# Neither fix has been tried at qft/qaoa_maxcut's OWN higher untested sizes (e.g.
+# qft n=32, qaoa_maxcut n=20) -- extending CIRCUIT_QUBIT_SIZES further needs its own
+# pilot, the same way this round did.
+CIRCUIT_FIDELITY_SETTINGS = {
+    "weak_random": {},
+    "qaoa_maxcut": {"fidelity_approximate_backend": "statevector"},
+    "w_state": {"fidelity_echo_samples": 32, "fidelity_echo_shots": 2048},
+    "qft": {"fidelity_approximate_backend": "statevector"},
+    "hw_efficient_ansatz": {"fidelity_echo_samples": 32, "fidelity_echo_shots": 2048},
 }
 
 INJECTION_METHODS = ["stochastic", "sa"]
@@ -122,6 +159,14 @@ def build_grid(circuits, n_qubits_override, injection_methods, n_seeds,
     for circuit in circuits:
         sizes = n_qubits_override if n_qubits_override is not None else CIRCUIT_QUBIT_SIZES[circuit]
         for n_qubits in sizes:
+            # Only apply CIRCUIT_FIDELITY_SETTINGS above the exact-fidelity tier --
+            # these flags are unused no-ops at or below it (run_experiment.py's own
+            # default fidelity_exact_threshold=13, or the CLI override if set), so
+            # applying them at n=8/12 would only pollute run_id_for's suffix and
+            # create a spurious duplicate of already-collected data under a new
+            # run_id, not change any actual run behavior.
+            exact_threshold = fidelity_exact_threshold if fidelity_exact_threshold is not None else 13
+            fidelity_settings = CIRCUIT_FIDELITY_SETTINGS.get(circuit, {}) if n_qubits > exact_threshold else {}
             for injection_method in injection_methods:
                 for block_algorithm in block_algorithms:
                     for mutation_scheme in mutation_schemes:
@@ -139,6 +184,9 @@ def build_grid(circuits, n_qubits_override, injection_methods, n_seeds,
                                     "seed": seed,
                                     "fidelity_exact_threshold": fidelity_exact_threshold,
                                     "injection_fidelity_exact_threshold": injection_fidelity_exact_threshold,
+                                    "fidelity_approximate_backend": fidelity_settings.get("fidelity_approximate_backend"),
+                                    "fidelity_echo_samples": fidelity_settings.get("fidelity_echo_samples"),
+                                    "fidelity_echo_shots": fidelity_settings.get("fidelity_echo_shots"),
                                 }
 
 
@@ -160,6 +208,18 @@ def run_id_for(cfg: dict) -> str:
         run_id += f"_fet{fet}"
     if ifet is not None:
         run_id += f"_ifet{ifet}"
+    # Same "only appended when non-default" rule as fet/ifet above -- keeps existing
+    # run_ids (n=8/12, weak_random's n=20) untouched, since CIRCUIT_FIDELITY_SETTINGS
+    # only sets these for the newly-piloted large-n configs (see its comment).
+    backend = cfg.get("fidelity_approximate_backend")
+    samples = cfg.get("fidelity_echo_samples")
+    shots = cfg.get("fidelity_echo_shots")
+    if backend is not None and backend != "mps":
+        run_id += f"_{backend}"
+    if samples is not None and samples != 8:
+        run_id += f"_es{samples}"
+    if shots is not None and shots != 128:
+        run_id += f"_sh{shots}"
     return run_id
 
 
@@ -241,6 +301,12 @@ def main(argv=None):
             cmd += ["--fidelity-exact-threshold", str(cfg["fidelity_exact_threshold"])]
         if cfg.get("injection_fidelity_exact_threshold") is not None:
             cmd += ["--injection-fidelity-exact-threshold", str(cfg["injection_fidelity_exact_threshold"])]
+        if cfg.get("fidelity_approximate_backend") is not None:
+            cmd += ["--fidelity-approximate-backend", cfg["fidelity_approximate_backend"]]
+        if cfg.get("fidelity_echo_samples") is not None:
+            cmd += ["--fidelity-echo-samples", str(cfg["fidelity_echo_samples"])]
+        if cfg.get("fidelity_echo_shots") is not None:
+            cmd += ["--fidelity-echo-shots", str(cfg["fidelity_echo_shots"])]
         print(f"[run]  {run_id}")
         # start_new_session=True makes this subprocess (and every worker it
         # spawns, e.g. joblib/loky) its own process group, so it can be torn
