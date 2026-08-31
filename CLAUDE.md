@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Academic research project (French PFE — end-of-studies project) on **optimizing quantum circuits with genetic algorithms**. The goal is to take a target quantum circuit (or unitary), partition it, and evolve a cheaper/shallower circuit that still reproduces the target's behavior with high fidelity, using **Qiskit** for circuit simulation and **DEAP** for evolutionary computation (NSGA-II / NSGA-III style multi-objective optimization).
 
-Most of the tree is still a research sandbox of **standalone Jupyter notebooks and scripts** (mono-objective → multi-objective → block-decomposed/scalable iterations), each self-contained and re-defining the functions it needs, with no shared package between them. The exception is `M1_finale/`, which has grown a real, if small, tooling layer on top of `final_m1_script.py`: it's importable as a module, has a CLI (`run_experiment.py`, `run_sweep.py`, `aggregate_results.py`) for structured/reproducible runs instead of ad-hoc notebook execution, and a pytest smoke test (`tests/test_pipeline_smoke.py`). There is still no lint/format tooling and no broader test suite beyond that one smoke test.
+Most of the tree is still a research sandbox of **standalone Jupyter notebooks and scripts** (mono-objective → multi-objective → block-decomposed/scalable iterations), each self-contained and re-defining the functions it needs, with no shared package between them. The exception is `M1_finale/`, which has grown a real, if small, tooling layer on top of `final_m1_script.py`: it's importable as a module, has a CLI (`run_experiment.py`, `run_sweep.py`, `aggregate_results.py`) for structured/reproducible runs instead of ad-hoc notebook execution, and two pytest files under `tests/` — `test_pipeline_smoke.py` (end-to-end pipeline smoke test) and `test_fidelity_estimator.py` (narrow correctness tests for `safe_fidelity_between_circuits`, guarding a specific historical bug in the SWAP-test estimator). There is still no lint/format tooling and no broader test suite beyond those two files.
 
 ## Setup and running code
 
@@ -46,7 +46,9 @@ python aggregate_results.py
 
 See the README's "Running experiments" section for the full flag reference (fidelity backend selection, injection trial counts, parallelism notes) — it's kept current there rather than duplicated here. `logs.txt` has the full narrative history of how this tooling and the scaling/research work evolved; `status.txt` has the latest supervisor-facing status snapshot.
 
-No lint or format commands exist in this repo. Do not invent a broader test suite beyond `tests/test_pipeline_smoke.py` unless asked.
+`pytest.ini` (root-level, `pythonpath = .`) exists because `M1_finale` isn't `pip install -e`'d — bare `pytest` (unlike `python -m pytest`) doesn't add the repo root to `sys.path` on its own, so `tests/`'s `from M1_finale.final_m1_script import ...` would otherwise raise `ModuleNotFoundError` when running the exact `pytest tests/...` commands documented above. Keep this file; it stops being necessary only if the project is ever properly packaged.
+
+No lint or format commands exist in this repo. Do not invent a broader test suite beyond `tests/test_pipeline_smoke.py`/`tests/test_fidelity_estimator.py` unless asked.
 
 Committed `.venv/`, `mon_env/`, `envq/` directories are local virtualenvs (already gitignored alongside `__pycache__/`, `*.pyc`, `.ipynb_checkpoints/`) — never edit files inside them. `runs/` (experiment output) is also gitignored.
 
