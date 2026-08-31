@@ -392,6 +392,15 @@ Extended all 3 of the SMS-EMOA sweeps with nsga3 at the same settings
   wall-clock of either nsga2 or smsemoa — a distinct trade-off point, not
   simply better/worse. Front size (92.20) sits between nsga2's (121.84)
   and smsemoa's (171.72).
+  [RETRACTED 2026-08-31 — see "SCALING VERIFICATION: NSGA-III/SMS-EMOA AT
+  n=12 AND FAMILY CEILINGS" below. The "HALF the wall-clock" claim was a
+  stale-vs-fresh measurement artifact, not a real algorithmic property:
+  nsga2/smsemoa's 52.41/50.95 numbers here were never re-measured when
+  nsga3 was added ("rows unchanged from above", literally) and predate
+  the 2026-08-26/27 injection-stage speedups; nsga3, added after those
+  speedups, was fast for an unrelated reason. Once all three are measured
+  on the same codebase (as they now are), the total-wall-clock gap is
+  ~5-9%, not ~50%, and holds equally at every tested size, not just n=8.]
 
 (b) mutation ablation: nsga3 swap_add 0.1428 ~= point 0.1419 >
   swap_add_delete 0.1302 — a THIRD distinct ranking (nsga2: point >
@@ -716,18 +725,43 @@ hybrid-LAS):
   weak_random           12  114.0   110.4    117.7
 All three algorithms are now within a few percent of each other at n=12
 — and stay that close at each family's ceiling too (e.g. qft@20: 296.0 /
-292.3 / 296.2; weak_random@20: 141.7 / 140.7 / 155.8). REVISES "NSGA-III
-ADDED AS THIRD PER-BLOCK OPTIMIZER"'s headline claim: NSGA-III's ~2x
-wall-clock advantage over NSGA-II, measured only at n=8 (52.41s vs
-25.34s, aggregated across all 5 circuits), does NOT hold at n=12 or
-above — it fully closes. Report the wall-clock advantage as an
-n=8-specific observation going forward, not a general one. Not
-investigated: WHY it narrows/closes with n (candidates: DEAP's
-sortLogNondominated's asymptotic advantage needs a large-enough
-population/front to pay off, which n=8's small blocks may not reach; or
-the per-block-optimization stage becomes a shrinking share of total
-wall-clock as n grows and the injection stage's own cost — which doesn't
-depend on block_algorithm — comes to dominate).
+292.3 / 296.2; weak_random@20: 141.7 / 140.7 / 155.8).
+
+CORRECTION (2026-08-31, same day, after tracing this further): the above
+was first written up as "NSGA-III's n=8 wall-clock advantage narrows and
+closes by n=12" — that framing is itself wrong. Re-examining "NSGA-III
+ADDED AS THIRD PER-BLOCK OPTIMIZER"'s own text: its n=8 table explicitly
+says "nsga2/smsemoa rows unchanged from above" when nsga3 was added —
+i.e. nsga2's 52.41s and smsemoa's 50.95s were literal carry-overs from
+the 2026-08-25 SMS-EMOA comparison, NEVER re-measured, and so still
+reflect the pipeline BEFORE the 2026-08-26/27 injection-stage speedups
+(the ~1000x sa_injection fix, the fidelity-echo estimator — both
+documented as "exact"/"bit-identical", i.e. speed-only changes). NSGA-III
+was added AFTER those speedups and was fast for an unrelated reason: it
+was simply measured on a faster codebase. The "HYPERVOLUME
+COMPARABILITY" work (same day) coincidentally regenerated all 3
+algorithms' n=8 data from scratch for front_raw — that regeneration is
+what's still on disk today, confirmed by its runs' 2026-08-28 mtimes —
+and its own caveat noted a "slight" fidelity_final shift (0.1491->0.1465,
+~1.7%) from re-running on today's codebase, but never checked wall-clock
+drift. Checking it now: nsga2 dropped 52.41s->27.83s and smsemoa
+50.95s->28.56s once actually re-measured post-speedup, landing right on
+top of nsga3's 25.34s->26.55s (which barely moved, since it was already
+post-speedup) — i.e. n=8 ALSO shows near-parity today, same as n=12+.
+There was never a real n=8-only advantage to narrow.
+The genuine, consistent effect (stage_block_optimization_s specifically,
+the DEAP-selection-algorithm-only comparison the original profiling
+targeted): nsga3 is ~5-9% cheaper than nsga2 at EVERY tested size (8:
+5.0%, 12: 8.4%, 16: 9.1%, 20: 7.9%) — small but real and scale-stable
+(not shrinking with n), consistent with selNSGA3's cheaper non-dominated
+sort (still the correct root cause from "NSGA-III ADDED", just far
+smaller in impact than first measured) being a small fraction of a
+generation's total cost, which is dominated by population fitness
+evaluation — identical across all 3 algorithms, hence no algorithm
+difference there. Answers status.txt's "why does the advantage narrow"
+research question: it doesn't narrow, because it was never large to begin
+with once measured consistently — report ~5-9% block-optimization-stage
+savings, not "half the wall-clock", in the paper.
 
 Fidelity ranking (mean fidelity_final, same 5 seeds), corrected:
   hw_efficient_ansatz  n=12: nsga2(0.0292) > smsemoa(0.0214) > nsga3(0.0146)
@@ -788,8 +822,10 @@ first 7-dir pass) -> 500 (after moving the 94-dir B/C/D batch) -> 525
 remaining row now reflects current codebase defaults.
 
 Not done / open:
-- WHY NSGA-III's wall-clock advantage narrows/closes between n=8 and
-  n=12 — not investigated, flagged as a candidate follow-up in Result 2.
+- DONE (same day, see CORRECTION above): root-caused why the n=8
+  wall-clock advantage seemed to narrow at n=12 — it never really
+  existed past ~5-9%, a stale-vs-fresh measurement artifact in the
+  original n=8 headline, not a scale effect.
 - Mutation-scheme and hybrid-LAS ablations (see "HYPERVOLUME
   COMPARABILITY") still only exist at n=8 for all 3 algorithms — not
   extended to n=12/ceiling in this pass (only the point/no-hybrid-LAS

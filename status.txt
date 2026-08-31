@@ -105,13 +105,22 @@ WHERE WE ARE
   transfer with no changes needed. While building the comparison table,
   found and fixed a real confound -- every prior NSGA-II n=12 run
   predated the same-day injection_fidelity_exact_threshold fix (12->7)
-  and was silently using the old, slower tier. Correcting it REVISES
-  last week's headline: NSGA-III's ~2x wall-clock advantage over
-  NSGA-II was an n=8-specific artifact -- it fully closes by n=12 and
-  stays closed at ceiling (all three algorithms within a few percent of
-  each other from n=12 up). The n=8-established fidelity ranking
-  (NSGA-II highest) holds at scale in 9/10 circuit x size cells; the
-  smsemoa-vs-nsga3 runner-up order is not stable across sizes/families.
+  and was silently using the old, slower tier. The n=8-established
+  fidelity ranking (NSGA-II highest) holds at scale in 9/10 circuit x
+  size cells; the smsemoa-vs-nsga3 runner-up order is not stable across
+  sizes/families.
+- RETRACTED last week's "NSGA-III is ~2x cheaper" headline (root-caused
+  same day, 2026-08-31): it was a stale-vs-fresh measurement artifact,
+  not a real algorithm property. NSGA-II/SMS-EMOA's original n=8 numbers
+  were never re-measured when NSGA-III was added ("rows unchanged from
+  above") and predated the 2026-08-26/27 injection-stage speedups;
+  NSGA-III, added after those speedups, was just measured on a faster
+  codebase. Once all three are measured consistently (as they now are,
+  at every tested size), the real, stable effect is NSGA-III's
+  block-optimization stage running ~5-9% cheaper than NSGA-II's -- real
+  (matches the DEAP non-dominated-sort profiling), but far smaller than
+  first reported. Report this ~5-9% figure in the paper, not "half the
+  wall-clock".
 - Cleaned up runs/ following a full audit (user request): moved 94
   stale/superseded/orphaned run directories (pre-CLI-flag legacy
   baseline, the confounded NSGA-II n=12 data above, and 4 orphaned
@@ -135,12 +144,10 @@ NEXT RESEARCH POINTS
    step -- cheapest, reuses existing code) > two more quality-score-
    based algorithms (IBEA, and a decomposition-based method) >
    SPEA2 as a classic baseline comparison.
-4. Investigate WHY NSGA-III's wall-clock advantage narrows/closes
-   between n=8 and n=12 (candidates: DEAP's sortLogNondominated needs a
-   large-enough population/front to pay off; or the per-block-
-   optimization stage becomes a shrinking share of total wall-clock as
-   the injection stage's own, block-algorithm-independent cost grows
-   with n) -- not yet investigated, flagged in logs.txt.
+4. DONE (2026-08-31): investigated why NSGA-III's wall-clock advantage
+   seemed to narrow past n=8 -- it never really existed past ~5-9%; the
+   n=8 headline was a stale-vs-fresh measurement artifact. See logs.txt
+   and the retraction above.
 5. Extend the mutation-scheme and hybrid-LAS ablations (currently
    n=8-only for all 3 algorithms) to n=12/ceiling, now that the
    baseline per-algorithm scaling data exists to build on.
