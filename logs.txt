@@ -3,6 +3,23 @@ Generated: 2026-08-18
 Last updated: 2026-08-31
 
 Recent activity (newest first; see the dated section below for full detail):
+- 2026-08-31: Data-hygiene pass on runs/ (user request: audit every sweep,
+  flag what's no longer relevant, intent to delete) -- found and moved
+  (not deleted) 94 stale/superseded/orphaned run directories across 4
+  categories into runs_backup_*/ folders; results_master.csv now 525
+  canonical rows, every row consistent with current codebase defaults.
+  See "SCALING VERIFICATION: NSGA-III/SMS-EMOA AT n=12 AND FAMILY
+  CEILINGS, PLUS RUNS/ DATA-HYGIENE CLEANUP".
+- 2026-08-31: Verified NSGA-III/SMS-EMOA scaling (status.txt's
+  next-research-point #2) -- 124 new runs, 0 failed, extending both from
+  n=8-only to n=12 and each family's ceiling. Same nsga2>smsemoa>nsga3
+  fidelity ranking as n=8 mostly holds (nsga2 highest in 9/10 cells).
+  Caught and fixed a real confound while building the comparison table:
+  all prior NSGA-II n=12 data predated the same-day injection_fidelity_
+  exact_threshold fix and silently used the old (slower) tier -- fixing
+  it REVISES the n=8-based "NSGA-III is ~2x cheaper" finding: that
+  wall-clock gap fully closes by n=12 and stays closed at each family's
+  ceiling. See same section below.
 - 2026-08-31: Re-benchmarked injection_fidelity_exact_threshold -- lowered
   12->7 and raised injection_fidelity_samples 2->8 (the exact tier is no
   longer competitive past n=7-8 now that a statevector fast path exists;
@@ -647,3 +664,141 @@ Not done / open:
 - Threshold (7) chosen from a synthetic base/target pair, not a real
   GA-produced candidate — the true crossover could differ by 1-2 qubits,
   not confirmed against a real candidate circuit.
+
+=====================================================================
+SCALING VERIFICATION: NSGA-III/SMS-EMOA AT n=12 AND FAMILY CEILINGS,
+PLUS RUNS/ DATA-HYGIENE CLEANUP (2026-08-31)
+=====================================================================
+Picked up status.txt's NEXT RESEARCH POINTS #2: whether NSGA-III/SMS-EMOA
+need the same per-family qubit-scaling fixes (statevector backend / raised
+echo-samples) that NSGA-II needed at n=16-20, since both were only ever
+run at n=8 (125 runs each, from the algorithm/mutation/hybrid-LAS
+ablations — see "RESEARCH ANGLE CHOSEN" and "NSGA-III ADDED").
+
+Method: ran run_sweep.py --block-algorithms nsga3 smsemoa
+--injection-methods stochastic (fills n=12 and each family's ceiling using
+the existing CIRCUIT_FIDELITY_SETTINGS, unchanged since it's keyed by
+circuit, not block_algorithm) — 100 new runs, 0 failed. Then filled
+NSGA-II's own ceiling-size coverage from 1-2 seeds/family up to 5 (the
+original 2026-08-28 scaling pilot only ran a handful of seeds per family,
+not a full 5-seed sweep) — 24 more runs, 0 failed.
+
+RESULT 1 (the actual research question): the fidelity-backend/sample
+settings tuned for NSGA-II transfer to NSGA-III/SMS-EMOA with zero new
+fixes needed — no floor-clipping, no timeouts, all 124 runs completed
+cleanly.
+
+RESULT 2 (a confound caught while building the comparison table, then
+fixed): every existing NSGA-II n=12 run predated the same-day
+injection_fidelity_exact_threshold fix (12->7, see "SCALING —
+INJECTION_FIDELITY_EXACT_THRESHOLD RE-BENCHMARKED") — their metrics.json
+recorded injection_fidelity_exact_threshold=12, while the freshly-run
+NSGA-III/SMS-EMOA n=12 data correctly used the new default (7). n=12 is
+exactly the size this threshold changes behavior for (exact tier for
+n<=12 under the old default vs. n<=7 under the new one); n=8 is
+unaffected either way (both defaults select the exact tier there, and
+it's cheap regardless), and n=16/20 is unaffected either way (both
+defaults select the statevector tier there) — so the confound was
+isolated to n=12 specifically. It inflated NSGA-II's apparent n=12
+wall-clock via the injection stage's more expensive exact-tier per-trial
+fidelity checks. Moved the 30 affected run dirs (25 standard-named + 5
+hash-named validation runs left over from the original threshold
+re-benchmark) to runs_backup_stale_ifet12_n12/ and re-ran all 25 NSGA-II
+n=12 configs under current defaults (0 failed).
+
+Corrected numbers (mean wall_clock_s, 5 seeds each, stochastic/point/no
+hybrid-LAS):
+  circuit               n   nsga2   nsga3  smsemoa
+  hw_efficient_ansatz   12   65.8    60.6     63.4
+  qaoa_maxcut           12   69.5    67.0     69.0
+  qft                   12  156.2   151.9    152.8
+  w_state               12   62.8    58.6     61.6
+  weak_random           12  114.0   110.4    117.7
+All three algorithms are now within a few percent of each other at n=12
+— and stay that close at each family's ceiling too (e.g. qft@20: 296.0 /
+292.3 / 296.2; weak_random@20: 141.7 / 140.7 / 155.8). REVISES "NSGA-III
+ADDED AS THIRD PER-BLOCK OPTIMIZER"'s headline claim: NSGA-III's ~2x
+wall-clock advantage over NSGA-II, measured only at n=8 (52.41s vs
+25.34s, aggregated across all 5 circuits), does NOT hold at n=12 or
+above — it fully closes. Report the wall-clock advantage as an
+n=8-specific observation going forward, not a general one. Not
+investigated: WHY it narrows/closes with n (candidates: DEAP's
+sortLogNondominated's asymptotic advantage needs a large-enough
+population/front to pay off, which n=8's small blocks may not reach; or
+the per-block-optimization stage becomes a shrinking share of total
+wall-clock as n grows and the injection stage's own cost — which doesn't
+depend on block_algorithm — comes to dominate).
+
+Fidelity ranking (mean fidelity_final, same 5 seeds), corrected:
+  hw_efficient_ansatz  n=12: nsga2(0.0292) > smsemoa(0.0214) > nsga3(0.0146)
+  hw_efficient_ansatz  n=20: nsga2(0.00045) > smsemoa(0.00022) > nsga3(0.00019)
+  qaoa_maxcut          n=12: nsga2(0.0549) > smsemoa(0.0355) > nsga3(0.0194)
+  qaoa_maxcut          n=16: nsga2(0.0292) > nsga3(0.0142) > smsemoa(0.0093)
+  qft                  n=12: smsemoa(0.0163) > nsga3(0.0159) > nsga2(0.0150)
+  qft                  n=20: nsga2(0.00022) > smsemoa(0.00020) > nsga3(0.00012)
+  w_state              n=12: nsga2(0.0560) > smsemoa(0.0367) > nsga3(0.0306)
+  w_state              n=20: nsga2(0.00069) > smsemoa(0.00040) ~= nsga3(0.00040)
+  weak_random          n=12: nsga2(0.3869) > smsemoa(0.3637) > nsga3(0.3365)
+  weak_random          n=20: nsga2(0.4170) > smsemoa(0.3602) > nsga3(0.3496)
+NSGA-II has the highest mean fidelity_final in 9/10 cells (the sole
+exception, qft@12, was the cell most exposed to the Result 2 confound —
+correcting it moved NSGA-II from first to last there: smsemoa(0.0163) >
+nsga3(0.0159) > nsga2(0.0150)). The full nsga2>smsemoa>nsga3 ordering
+holds in 8/10 cells; qaoa_maxcut@16 swaps nsga3/smsemoa (nsga2 still
+wins), qft@12 reorders all three. Net effect: the n=8-established
+fidelity ranking is confirmed as scale-independent for NSGA-II's win
+specifically, but the smsemoa-vs-nsga3 runner-up ordering is not stable
+across sizes/families — don't generalize it beyond "no universally-best
+runner-up" (consistent with this file's existing "no universally-best
+mutation operator" framing).
+
+RESULT 3 (runs/ data-hygiene cleanup, found while auditing for the
+above): user request ("check all the sweeps ... tell me which are not
+relevant anymore ... my intention is to delete"). Audited every directory
+in runs/ against current run_sweep.py naming/defaults; found 4 categories
+of stale/superseded/orphaned data (94 dirs total, on top of a first pass
+of 7 backend-tier duplicates already moved earlier the same session).
+Moved (not deleted, per user's choice) into separate runs_backup_*/
+folders rather than one bucket, so each stays independently
+inspectable/restorable:
+  - runs_backup_pre_fidelity_settings_fix/ (7 dirs, moved first): n=16/20
+    duplicates from before the 2026-08-28 per-family fidelity-backend
+    fix — e.g. a qaoa_maxcut@16 seed still sitting at fidelity_final=0.0
+    under the old mps backend, superseded by its statevector-backend
+    rerun.
+  - runs_backup_legacy_preflag_baseline/ (60 dirs): the original Phase 2
+    "8-qubit/50-run baseline" (all 5 circuits x sa/stochastic x 5 seeds)
+    plus an early weak_random n=12/20 probe — all predate
+    --block-algorithm/--mutation-scheme existing as CLI flags at all.
+    Fully superseded by equivalent current-format NSGA-II data; the one
+    finding they ever produced (sa~=stochastic fidelity at n=8) is
+    already written up in "NEXT STEPS — REPOSITORY SETUP ROADMAP"'s
+    Phase 2 entry.
+  - runs_backup_stale_ifet12_n12/ (30 dirs): the confounded NSGA-II n=12
+    data from Result 2, regenerated under current defaults.
+  - runs_backup_orphaned_sa_scale_probes/ (4 dirs): single-seed,
+    NSGA-II-only sa-injection runs at each family's ceiling size (n=16 or
+    20), no NSGA-III/SMS-EMOA counterpart and not part of any completed
+    comparison — an abandoned probe, never referenced as a result
+    anywhere in this file.
+results_master.csv regenerated via aggregate_results.py after each move:
+601 rows (peak, after the two new scaling sweeps) -> 594 (after the
+first 7-dir pass) -> 500 (after moving the 94-dir B/C/D batch) -> 525
+(after regenerating category C's 25 NSGA-II n=12 configs). Every
+remaining row now reflects current codebase defaults.
+
+Not done / open:
+- WHY NSGA-III's wall-clock advantage narrows/closes between n=8 and
+  n=12 — not investigated, flagged as a candidate follow-up in Result 2.
+- Mutation-scheme and hybrid-LAS ablations (see "HYPERVOLUME
+  COMPARABILITY") still only exist at n=8 for all 3 algorithms — not
+  extended to n=12/ceiling in this pass (only the point/no-hybrid-LAS
+  baseline needed for the scaling question was).
+- sa-injection at scale (n=12+) has zero current data for any algorithm
+  after moving the 4 orphaned probes aside — an open axis, not
+  prioritized in status.txt's NEXT RESEARCH POINTS.
+- runs_backup_pre_front_raw/ (mentioned in "HYPERVOLUME COMPARABILITY")
+  no longer exists on disk (removed at some point outside this session,
+  runs/ is gitignored so there's no git history to check) — out of
+  scope for this cleanup, nothing in the current runs/ tree depended on
+  it.

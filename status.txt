@@ -1,6 +1,6 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-08-28
+Date: 2026-08-31
 
 =====================================================================
 OBJECTIVE
@@ -99,18 +99,51 @@ WHERE WE ARE
 - Did a literature check of the wider multi-objective algorithm field
   to confirm SMS-EMOA was a reasonable choice and nothing better-
   suited was missed. Nothing displaces the existing plan.
+- Answered next-research-point #2 below: NSGA-III/SMS-EMOA were scaled
+  up from n=8-only to n=12 and each family's ceiling (124 new runs, 0
+  failed). The per-family fidelity-backend settings tuned for NSGA-II
+  transfer with no changes needed. While building the comparison table,
+  found and fixed a real confound -- every prior NSGA-II n=12 run
+  predated the same-day injection_fidelity_exact_threshold fix (12->7)
+  and was silently using the old, slower tier. Correcting it REVISES
+  last week's headline: NSGA-III's ~2x wall-clock advantage over
+  NSGA-II was an n=8-specific artifact -- it fully closes by n=12 and
+  stays closed at ceiling (all three algorithms within a few percent of
+  each other from n=12 up). The n=8-established fidelity ranking
+  (NSGA-II highest) holds at scale in 9/10 circuit x size cells; the
+  smsemoa-vs-nsga3 runner-up order is not stable across sizes/families.
+- Cleaned up runs/ following a full audit (user request): moved 94
+  stale/superseded/orphaned run directories (pre-CLI-flag legacy
+  baseline, the confounded NSGA-II n=12 data above, and 4 orphaned
+  single-seed sa-at-scale probes) into separate runs_backup_*/ folders,
+  not deleted. results_master.csv is now 525 rows, all internally
+  consistent with current codebase defaults. See logs.txt's "SCALING
+  VERIFICATION ... PLUS RUNS/ DATA-HYGIENE CLEANUP" for the full
+  breakdown.
 
 =====================================================================
 NEXT RESEARCH POINTS
 =====================================================================
 1. Start results write-up for the December submission.
-2. Check whether NSGA-III/SMS-EMOA need the same per-family qubit-
-   scaling fixes (statevector backend / raised echo-samples) that
-   NSGA-II needed at n=16-20, or whether the noise-floor/entanglement
-   problems there were NSGA-II-independent (fidelity backend choice,
-   not block-optimizer choice, so likely yes -- not yet verified).
+2. DONE (2026-08-31): NSGA-III/SMS-EMOA scaling verified -- the
+   per-family fidelity-backend fixes transfer as-is, no NSGA-III/
+   SMS-EMOA-specific fixes needed. Revised finding along the way:
+   NSGA-III's wall-clock advantage over NSGA-II was n=8-specific, not
+   scale-general -- it closes by n=12. See logs.txt.
 3. Candidate next algorithm to add, in priority order: MOSA (a
    multi-objective version of the project's own simulated-annealing
    step -- cheapest, reuses existing code) > two more quality-score-
    based algorithms (IBEA, and a decomposition-based method) >
    SPEA2 as a classic baseline comparison.
+4. Investigate WHY NSGA-III's wall-clock advantage narrows/closes
+   between n=8 and n=12 (candidates: DEAP's sortLogNondominated needs a
+   large-enough population/front to pay off; or the per-block-
+   optimization stage becomes a shrinking share of total wall-clock as
+   the injection stage's own, block-algorithm-independent cost grows
+   with n) -- not yet investigated, flagged in logs.txt.
+5. Extend the mutation-scheme and hybrid-LAS ablations (currently
+   n=8-only for all 3 algorithms) to n=12/ceiling, now that the
+   baseline per-algorithm scaling data exists to build on.
+6. sa-injection at scale (n=12+) has zero current data for any
+   algorithm after this cleanup removed 4 orphaned single-seed probes
+   -- open axis, not yet prioritized against items 3-5 above.
