@@ -2051,9 +2051,9 @@ def optimise_circuit_pipeline(
     fidelity_exact_threshold: int = 13,
     fidelity_samples: int = 8,
     fidelity_shots: int = 128,
-    injection_fidelity_samples: int = 2,
+    injection_fidelity_samples: int = 8,
     injection_fidelity_shots: int = 16,
-    injection_fidelity_exact_threshold: int = 12,
+    injection_fidelity_exact_threshold: int = 7,
     fidelity_driven_max_trials: int = 300,
     fidelity_driven_statevector_threshold: int = 24,
     fidelity_approximate_backend: str = "mps",  # "mps" or "statevector"
@@ -2085,19 +2085,28 @@ def optimise_circuit_pipeline(
     # replaced by a fidelity-echo estimator on 2026-08-27 (see _echo_test_circuit), which is
     # dramatically cheaper on exactly this kind of genuinely-entangled comparison (~0.06s vs.
     # a >90s timeout on a matching real 10-qubit QAOA case -- see logs.txt "SCALING --
-    # ECHO-TEST FIDELITY BACKEND REPLACES SWAP TEST"), so injection_fidelity_exact_threshold's
-    # low value below (deliberately kept lower than fidelity_exact_threshold specifically to
-    # route these hundreds-of-calls loops around the old slow approximate backend) is now a
-    # stale, over-conservative threshold that has NOT yet been re-benchmarked against the new
-    # backend -- a natural next scaling step, not done here. Below
-    # injection_fidelity_exact_threshold, use exact dense-Operator fidelity instead -- for
+    # ECHO-TEST FIDELITY BACKEND REPLACES SWAP TEST"). RE-BENCHMARKED 2026-08-31 (see logs.txt
+    # "SCALING -- INJECTION_FIDELITY_EXACT_THRESHOLD RE-BENCHMARKED") against
+    # fidelity_driven_injection's own statevector fast path (its tier 2, gated by
+    # fidelity_driven_statevector_threshold below): forcing each tier head-to-head on identical
+    # (base, target) pairs at n=4-13 showed the exact tier (tier 1) is no longer competitive
+    # anywhere past n=7-8 -- it's already 3-12x slower by n=9-11 and ~700x slower by n=13 (146s
+    # vs 0.2s), since it rebuilds+multiplies a dense 2^n x 2^n operator on every acceptance while
+    # the statevector tier only ever touches O(2^n)-sized state vectors. The OLD "may be
+    # raisable" note this replaced was speculative and, per this data, backwards: lowered from
+    # 12 to 7 (roughly where the two tiers are last at parity) rather than raised toward
+    # fidelity_exact_threshold's 13. Also raised injection_fidelity_samples 2->8 in the same
+    # pass: at the old threshold's boundary (n=12/13) the statevector tier's accept/reject
+    # decisions visibly diverged from the exact tier's ground truth at samples=2 (different
+    # kept-gate sets, not just noisier numbers); samples=8 tracks the exact tier's decisions
+    # much more closely while remaining ~100-700x cheaper than the exact tier at n=12/13.
+    # Below injection_fidelity_exact_threshold, use exact dense-Operator fidelity instead -- for
     # genuinely entangled targets (e.g. QAOA) exact is both correct AND was faster than the OLD
     # SWAP-test proxy at these sizes (measured: 25s/call exact vs. 242.8s approximate at n=12 on
     # a real qaoa_maxcut candidate/target pair -- see "SCALING — DEFERRED" in logs.txt). Kept as
     # its own (separate, lower) threshold from fidelity_exact_threshold because this loop runs
-    # hundreds of calls, not a handful -- exact cost was fine at n=12 (25s) but not at n=14+
-    # (898s/call measured against the OLD SWAP-test fallback), so this must not follow the
-    # general threshold up that far without re-measuring against the new echo-test backend.
+    # hundreds of calls, not a handful -- exact cost is now only competitive up to n=7-8, not the
+    # n=12-14 range that comparison against the OLD SWAP-test fallback had suggested.
     injection_fid_kwargs = dict(fidelity_exact_threshold=injection_fidelity_exact_threshold,
                                 fidelity_samples=injection_fidelity_samples,
                                 fidelity_shots=injection_fidelity_shots)

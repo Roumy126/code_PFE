@@ -11,9 +11,9 @@ rest of the sweep and no run leaks state (matplotlib figures, DEAP's
 
 The grid below is the Phase 2 "fixed benchmark set": all five circuit
 generators wired into run_experiment.py's CIRCUIT_GENERATORS, each swept at
-sizes spanning the exact-fidelity tier (8), the approximate tier just above
-the injection-stage fast paths (12), and each family's own pilot-validated
-ceiling (16 for qaoa_maxcut, 20 for the other four) -- see CIRCUIT_QUBIT_SIZES
+sizes spanning the exact-fidelity tier (8), a mid-size approximate-tier point
+(12), and each family's own pilot-validated ceiling (16 for qaoa_maxcut, 20
+for the other four) -- see CIRCUIT_QUBIT_SIZES
 and CIRCUIT_FIDELITY_SETTINGS below for what each family's ceiling needed
 (a different fidelity-backend/sample/shot setting per family, not a single
 global default) and why -- edit CIRCUITS / CIRCUIT_QUBIT_SIZES / INJECTION_
@@ -252,8 +252,10 @@ def parse_args(argv=None):
                     help="Passed through to run_experiment.py's flag of the same name "
                          "(fidelity_driven_injection's per-trial loop, which always runs "
                          "regardless of --injection-methods). Default: let run_experiment.py "
-                         "use its own default (12). E.g. pass 13 to sweep 13-qubit circuits "
-                         "on the fixed, exact fast path instead of the approximate one.")
+                         "use its own default (7, lowered from 12 on 2026-08-31 -- see logs.txt "
+                         "'SCALING -- INJECTION_FIDELITY_EXACT_THRESHOLD RE-BENCHMARKED'). E.g. pass "
+                         "13 to force the exact fast path up to 13-qubit circuits instead of the "
+                         "(now cheaper) statevector one.")
     p.add_argument("--runs-dir", default="runs")
     p.add_argument("--dry-run", action="store_true", help="Print the grid and exit.")
     return p.parse_args(argv)

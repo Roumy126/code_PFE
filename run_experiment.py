@@ -111,38 +111,41 @@ def parse_args(argv=None):
                          "(dense 2^n x 2^n operator) regardless -- 13 is still the largest size "
                          "cheap enough for ~5 calls/run. Lower sa-iters manually for runs above "
                          "this threshold -- it isn't auto-scaled.")
-    p.add_argument("--injection-fidelity-exact-threshold", type=int, default=12,
+    p.add_argument("--injection-fidelity-exact-threshold", type=int, default=7,
                     help="Exact-vs-approximate threshold used ONLY inside the injection stage's "
                          "per-trial loop (hundreds of calls/run) -- kept separate from and lower "
                          "than --fidelity-exact-threshold since exact cost there compounds over "
-                         "many trials. For genuinely entangled targets (e.g. QAOA) exact was both "
-                         "correct and faster than the OLD SWAP-test proxy at n<=12 (measured: 25s "
-                         "exact vs. 242.8s approximate per call at n=12) -- see the "
-                         "'SCALING — DEFERRED' entry in logs.txt. NOT raised to 13/14 here because "
-                         "per-call exact cost there (145s/898s) times hundreds of trials is worse "
-                         "than the approximate path it would replace -- but the approximate path is "
-                         "now the much cheaper fidelity-echo estimator (see --fidelity-exact-"
-                         "threshold above), so this threshold has NOT yet been re-benchmarked "
-                         "against it and may be raisable; see logs.txt for the flagged next step. "
-                         "If raising it doesn't help enough on a genuinely entangled family (e.g. "
-                         "QAOA still doesn't finish per-run within a reasonable bound even past "
-                         "this threshold), also see --fidelity-driven-max-trials below -- the "
-                         "greedy injection pass's per-trial cost is what actually dominates once "
-                         "past this threshold, not this threshold's own exact/approximate split.")
+                         "many trials. RE-BENCHMARKED 2026-08-31 against fidelity_driven_injection's "
+                         "own statevector fast path (see logs.txt 'SCALING -- INJECTION_FIDELITY_"
+                         "EXACT_THRESHOLD RE-BENCHMARKED'): forcing each tier head-to-head at n=4-13 "
+                         "showed the exact tier is no longer competitive past n=7-8 (3-12x slower by "
+                         "n=9-11, ~700x slower by n=13) now that the statevector tier exists -- the "
+                         "old default of 12 predated that tier and was never checked against it. "
+                         "Lowered 12->7 (roughly where the two tiers are last at parity), NOT raised "
+                         "as an earlier note here had speculated. If a genuinely entangled family "
+                         "(e.g. QAOA) still doesn't finish per-run within a reasonable bound, see "
+                         "--fidelity-driven-max-trials below -- the greedy injection pass's per-trial "
+                         "cost is what actually dominates once past this threshold, not this "
+                         "threshold's own exact/approximate split.")
     p.add_argument("--fidelity-echo-samples", type=int, default=8,
                     help="Random product states averaged per approximate fidelity estimate "
                          "(used for the pipeline's own reporting-level checks, not injection trials).")
     p.add_argument("--fidelity-echo-shots", type=int, default=128,
                     help="Shots per approximate fidelity sample. Used for the pipeline's own "
                          "reporting-level checks, not injection trials.")
-    p.add_argument("--injection-fidelity-samples", type=int, default=2,
+    p.add_argument("--injection-fidelity-samples", type=int, default=8,
                     help="Random product states averaged per fidelity estimate INSIDE the injection "
-                         "stage's per-trial loop (hundreds of calls). Kept far lower than "
+                         "stage's per-trial loop (hundreds of calls). Kept lower than "
                          "--fidelity-echo-samples because these calls compare circuits that differ by "
                          "a newly-added cross-block entangling gate, which can still be much more "
                          "expensive for genuinely entangled target families than the near-identical "
                          "pairs the general default was tuned against, even with the faster "
-                         "fidelity-echo estimator.")
+                         "fidelity-echo estimator. Raised 2->8 on 2026-08-31 alongside lowering "
+                         "--injection-fidelity-exact-threshold: at samples=2, the statevector tier's "
+                         "accept/reject decisions visibly diverged from the exact tier's ground truth "
+                         "at n=12/13 (different kept-gate sets); samples=8 tracks it much more closely "
+                         "while remaining ~100-700x cheaper than the exact tier at those sizes -- see "
+                         "logs.txt 'SCALING -- INJECTION_FIDELITY_EXACT_THRESHOLD RE-BENCHMARKED'.")
     p.add_argument("--injection-fidelity-shots", type=int, default=16,
                     help="Shots per injection-stage fidelity sample. See --injection-fidelity-samples.")
     p.add_argument("--fidelity-driven-max-trials", type=int, default=300,
