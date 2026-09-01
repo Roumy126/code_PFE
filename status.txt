@@ -1,6 +1,6 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-08-31
+Date: 2026-09-01
 
 =====================================================================
 OBJECTIVE
@@ -148,9 +148,18 @@ NEXT RESEARCH POINTS
    seemed to narrow past n=8 -- it never really existed past ~5-9%; the
    n=8 headline was a stale-vs-fresh measurement artifact. See logs.txt
    and the retraction above.
-5. Extend the mutation-scheme and hybrid-LAS ablations (currently
-   n=8-only for all 3 algorithms) to n=12/ceiling, now that the
-   baseline per-algorithm scaling data exists to build on.
+5. PARTIALLY DONE (2026-09-01): extended the mutation-scheme and
+   hybrid-LAS ablations from n=8-only to n=12 (all 3 algorithms, 225
+   new runs, 0 failed) -- ceiling sizes (16-20q) not yet covered, a
+   deliberate scope reduction. Two findings: the per-algorithm best
+   mutation scheme is not stable across scale either (only nsga2 keeps
+   its n=8 ranking); hybrid-LAS's effect on fidelity_final flips from
+   n=8 -- nsga2's n=8 "wash" becomes a consistent gain at n=12, same
+   size as smsemoa/nsga3's gains, root-caused to fidelity_driven_
+   injection's greedy pass dominating far less often at n=12 (~21% of
+   runs vs. 92-96% at n=8), so hybrid-LAS's per-block gains propagate
+   into the final circuit much more often. See logs.txt.
 6. sa-injection at scale (n=12+) has zero current data for any
    algorithm after this cleanup removed 4 orphaned single-seed probes
-   -- open axis, not yet prioritized against items 3-5 above.
+   -- open axis, not yet prioritized against items 3/5 (ceiling-size
+   extension) above.

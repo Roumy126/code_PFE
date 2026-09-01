@@ -132,7 +132,8 @@ def _normalize_shared(costs: np.ndarray, f_min: np.ndarray, f_max: np.ndarray) -
     return (costs - f_min) / denom
 
 
-def _pooled_fair_hv_rows(runs_dir: Path, mutation_scheme: str, hybrid_las: bool) -> list:
+def _pooled_fair_hv_rows(runs_dir: Path, mutation_scheme: str, hybrid_las: bool,
+                          n_qubits: int = BASELINE_N_QUBITS) -> list:
     """Core fair-HV pooling logic for one (mutation_scheme, hybrid_las) combination --
     returns one row per (circuit, seed, block, block_algorithm), computed from raw
     Pareto-front points (metrics.json's front_raw field, added 2026-08-28 specifically to
@@ -157,7 +158,7 @@ def _pooled_fair_hv_rows(runs_dir: Path, mutation_scheme: str, hybrid_las: bool)
         for seed in range(FAIR_HV_N_SEEDS):
             per_algo_blocks = {}
             for algo in FAIR_HV_ALGORITHMS:
-                run_id = f"{circuit}_8q_stochastic_{algo}_{mutation_scheme}_{las_flag}_g100_p100_seed{seed}"
+                run_id = f"{circuit}_{n_qubits}q_stochastic_{algo}_{mutation_scheme}_{las_flag}_g100_p100_seed{seed}"
                 metrics_path = runs_dir / run_id / "metrics.json"
                 if not metrics_path.exists():
                     continue
@@ -206,28 +207,28 @@ def table_fair_hv_comparison(runs_dir: Path) -> pd.DataFrame:
     return _aggregate_fair_hv(rows, ["block_algorithm"])
 
 
-def table_fair_hv_mutation_ablation(runs_dir: Path) -> pd.DataFrame:
+def table_fair_hv_mutation_ablation(runs_dir: Path, n_qubits: int = BASELINE_N_QUBITS) -> pd.DataFrame:
     """Fair hypervolume across mutation schemes -- mirrors table_mutation_ablation but
     with a shared fixed reference point instead of results_master.csv's adaptive mean_hv."""
     rows = []
     for scheme in ["point", "swap_add", "swap_add_delete"]:
-        rows += _pooled_fair_hv_rows(runs_dir, mutation_scheme=scheme, hybrid_las=False)
+        rows += _pooled_fair_hv_rows(runs_dir, mutation_scheme=scheme, hybrid_las=False, n_qubits=n_qubits)
     return _aggregate_fair_hv(rows, ["block_algorithm", "mutation_scheme"])
 
 
-def table_fair_hv_hybrid_las_ablation(runs_dir: Path) -> pd.DataFrame:
+def table_fair_hv_hybrid_las_ablation(runs_dir: Path, n_qubits: int = BASELINE_N_QUBITS) -> pd.DataFrame:
     """Fair hypervolume with/without hybrid LAS -- mirrors table_hybrid_las_ablation but
     with a shared fixed reference point instead of results_master.csv's adaptive mean_hv."""
     rows = []
     for las in [False, True]:
-        rows += _pooled_fair_hv_rows(runs_dir, mutation_scheme="point", hybrid_las=las)
+        rows += _pooled_fair_hv_rows(runs_dir, mutation_scheme="point", hybrid_las=las, n_qubits=n_qubits)
     return _aggregate_fair_hv(rows, ["block_algorithm", "hybrid_las"])
 
 
-def table_mutation_ablation(df: pd.DataFrame) -> pd.DataFrame:
+def table_mutation_ablation(df: pd.DataFrame, n_qubits: int = BASELINE_N_QUBITS) -> pd.DataFrame:
     """Mutation-scheme ablation, split by block algorithm (no hybrid LAS)."""
     subset = df[
-        (df["n_qubits"] == BASELINE_N_QUBITS)
+        (df["n_qubits"] == n_qubits)
         & (~df["is_legacy_schema"])
         & (df["hybrid_las"] == False)
         & (df["injection_method"] == "stochastic")
@@ -242,7 +243,7 @@ def table_mutation_ablation(df: pd.DataFrame) -> pd.DataFrame:
     return g
 
 
-def table_hybrid_las_ablation(df: pd.DataFrame) -> pd.DataFrame:
+def table_hybrid_las_ablation(df: pd.DataFrame, n_qubits: int = BASELINE_N_QUBITS) -> pd.DataFrame:
     """Hybrid GA+LAS ablation at point mutation, split by block algorithm.
 
     Includes a paired improved-fraction: the share of matching
@@ -251,7 +252,7 @@ def table_hybrid_las_ablation(df: pd.DataFrame) -> pd.DataFrame:
     ("16/25 improved" style) rather than only a mean delta.
     """
     subset = df[
-        (df["n_qubits"] == BASELINE_N_QUBITS)
+        (df["n_qubits"] == n_qubits)
         & (~df["is_legacy_schema"])
         & (df["mutation_scheme"] == "point")
         & (df["injection_method"] == "stochastic")
@@ -408,6 +409,13 @@ def main(argv=None):
         "fair_hv_mutation_ablation": table_fair_hv_mutation_ablation(args.runs_dir),
         "hybrid_las_ablation": table_hybrid_las_ablation(df),
         "fair_hv_hybrid_las_ablation": table_fair_hv_hybrid_las_ablation(args.runs_dir),
+        # n=12 mutation-scheme/hybrid-LAS ablations (added 2026-09-01, see logs.txt's
+        # "MUTATION-SCHEME AND HYBRID-LAS ABLATIONS EXTENDED TO n=12") -- ceiling sizes
+        # (16-20q) not covered yet, same scope limit as that sweep itself.
+        "mutation_ablation_n12": table_mutation_ablation(df, n_qubits=12),
+        "fair_hv_mutation_ablation_n12": table_fair_hv_mutation_ablation(args.runs_dir, n_qubits=12),
+        "hybrid_las_ablation_n12": table_hybrid_las_ablation(df, n_qubits=12),
+        "fair_hv_hybrid_las_ablation_n12": table_fair_hv_hybrid_las_ablation(args.runs_dir, n_qubits=12),
         "injection_method_comparison": table_injection_method_comparison(df),
         "injection_method_legacy": table_injection_method_legacy(df),
         "scaling": table_scaling(df),
@@ -451,6 +459,22 @@ def main(argv=None):
         fig_grouped_bar(tables["fair_hv_hybrid_las_ablation"], x="block_algorithm", hue="hybrid_las",
                          y="fair_mean_hv", title="Hybrid GA+LAS ablation: fair hypervolume",
                          ylabel="fair_mean_hv", out_path=figures_dir / "hybrid_las_ablation_fair_hv.png")
+
+    fig_grouped_bar(tables["mutation_ablation_n12"], x="mutation_scheme", hue="block_algorithm",
+                     y="fidelity_final", title="Mutation-scheme ablation (n=12)",
+                     ylabel="fidelity_final", out_path=figures_dir / "mutation_ablation_n12.png")
+    if not tables["fair_hv_mutation_ablation_n12"].empty:
+        fig_grouped_bar(tables["fair_hv_mutation_ablation_n12"], x="mutation_scheme", hue="block_algorithm",
+                         y="fair_mean_hv", title="Mutation-scheme ablation (n=12): fair hypervolume",
+                         ylabel="fair_mean_hv", out_path=figures_dir / "mutation_ablation_fair_hv_n12.png")
+
+    fig_grouped_bar(tables["hybrid_las_ablation_n12"], x="block_algorithm", hue="hybrid_las",
+                     y="fidelity_final", title="Hybrid GA+LAS ablation (n=12)",
+                     ylabel="fidelity_final", out_path=figures_dir / "hybrid_las_ablation_n12.png")
+    if not tables["fair_hv_hybrid_las_ablation_n12"].empty:
+        fig_grouped_bar(tables["fair_hv_hybrid_las_ablation_n12"], x="block_algorithm", hue="hybrid_las",
+                         y="fair_mean_hv", title="Hybrid GA+LAS ablation (n=12): fair hypervolume",
+                         ylabel="fair_mean_hv", out_path=figures_dir / "hybrid_las_ablation_fair_hv_n12.png")
 
     fig_grouped_bar(tables["injection_method_comparison"], x="block_algorithm", hue="injection_method",
                      y="fidelity_final", title="Injection method: fidelity",

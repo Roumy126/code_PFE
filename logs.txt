@@ -1,8 +1,25 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 Recent activity (newest first; see the dated section below for full detail):
+- 2026-09-01: Extended the mutation-scheme and hybrid-LAS ablations
+  (status.txt's next-research-point #5) from n=8-only to n=12, all 3
+  algorithms -- 225 new runs, 0 failed. Two findings beyond n=8: (1) the
+  per-algorithm best mutation scheme is NOT stable across scale either --
+  only nsga2 keeps n=8's point > swap_add_delete > swap_add ordering;
+  smsemoa and nsga3 both reorder at n=12 -- extends "no universally-best
+  mutation operator" to "not stable across scale" too. (2) hybrid-LAS's
+  effect on fidelity_final FLIPS from n=8: nsga2's n=8 "wash" (16/25
+  improved, mean delta -0.00075) becomes a consistent gain at n=12 (22/25,
+  +0.00273), and all 3 algorithms now show similar-sized gains (22-24/25,
+  +0.0027 to +0.0036) rather than nsga3 uniquely benefiting most. Root
+  cause: fidelity_driven_injection's greedy pass, which dominates 92-96%
+  of n=8 runs (point/stochastic subset), only dominates ~21% of n=12
+  runs -- at n=12 the injection_method's own (stochastic) result usually
+  wins instead, so hybrid-LAS's per-block fidelity gains propagate into
+  fidelity_final far more often. See "MUTATION-SCHEME AND HYBRID-LAS
+  ABLATIONS EXTENDED TO n=12".
 - 2026-08-31: Data-hygiene pass on runs/ (user request: audit every sweep,
   flag what's no longer relevant, intent to delete) -- found and moved
   (not deleted) 94 stale/superseded/orphaned run directories across 4
@@ -838,3 +855,119 @@ Not done / open:
   runs/ is gitignored so there's no git history to check) — out of
   scope for this cleanup, nothing in the current runs/ tree depended on
   it.
+
+=====================================================================
+MUTATION-SCHEME AND HYBRID-LAS ABLATIONS EXTENDED TO n=12 (2026-09-01)
+=====================================================================
+Picked up status.txt's NEXT RESEARCH POINTS #5: the mutation-scheme and
+hybrid-LAS ablations (see "RESEARCH ANGLE CHOSEN AND IMPLEMENTED" and
+"NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER") existed only at n=8 for all
+3 algorithms, even though per-algorithm scaling data now exists up to n=12
+and each family's ceiling (see "SCALING VERIFICATION"). Scoped to n=12
+only, not each family's ceiling (16-20q) -- a deliberate reduction from the
+full extension to keep this pass to ~225 runs (~6 hours) instead of
+600-750; ceiling-size coverage for these two axes remains open (see below).
+
+Method: two staged single-axis run_sweep.py invocations (not a full
+factorial), matching the original n=8 design -- mutation ablation fixes
+hybrid_las=0 and varies mutation_scheme over all 3 algorithms x 5 circuits
+x 5 seeds; hybrid-LAS ablation fixes mutation_scheme=point and varies
+hybrid_las over the same grid. injection_method=stochastic throughout,
+matching the original ablations. 225 configs were new (150 mutation +
+75 hybrid-LAS); the point/las0 baseline cells (75) already existed from
+"SCALING VERIFICATION"'s n=12 coverage and were skipped by run_sweep.py's
+existing-metrics.json check. 0 failed.
+
+MUTATION-SCHEME ABLATION, n=12 (mean fidelity_final, 25 runs/cell = 5
+circuits x 5 seeds, stochastic injection, no hybrid-LAS):
+  nsga2:   point 0.1084 > swap_add_delete 0.0904 > swap_add 0.0824
+  smsemoa: point 0.0947 > swap_add 0.0825 > swap_add_delete 0.0803
+  nsga3:   swap_add_delete 0.0913 > point 0.0834 > swap_add 0.0776
+Comparing to n=8's rankings (point > swap_add_delete > swap_add for
+nsga2; swap_add_delete > swap_add > point for smsemoa; swap_add ~= point
+> swap_add_delete for nsga3): nsga2 is the ONLY algorithm that keeps its
+n=8 ordering at n=12. smsemoa's ranking fully reverses (point moves from
+worst to best). nsga3's ranking reorders (swap_add_delete moves from
+worst to best; swap_add moves from a near-tie for best to worst). Net
+effect: this codebase's existing "no universally-best mutation operator"
+finding (true across algorithms at n=8) now extends to "not stable across
+scale either" for 2 of 3 algorithms -- a stronger and more surprising
+result than the n=8-only version, worth its own callout in the paper
+rather than folding into the n=8 finding as a footnote.
+
+HYBRID-LAS ABLATION, n=12 (point mutation, stochastic injection, paired
+by circuit+seed, 25 pairs/algorithm):
+  nsga2:   22/25 improved, mean delta +0.00273, median +0.00059
+  smsemoa: 22/25 improved, mean delta +0.00361, median +0.00092
+  nsga3:   24/25 improved, mean delta +0.00334, median +0.00095
+Compare to n=8 (nsga2 16/25 improved, mean delta -0.00075, i.e. a wash;
+smsemoa 18/25, +0.00186; nsga3 21/25, +0.0056, the best pairing of the
+three): at n=12, hybrid-LAS is a consistent, similarly-sized win for ALL
+THREE algorithms (mean deltas within +0.0027 to +0.0036 of each other) --
+nsga2's n=8 "wash" is gone, and nsga3 no longer stands out as uniquely
+benefiting most (smsemoa's n=12 mean delta is actually slightly larger).
+Both n=8 claims ("nsga2+hybrid-LAS washes out", "nsga3 pairs best with
+hybrid-LAS") are scale-specific, not general -- report the n=12 numbers as
+a correction/refinement, not a replacement, since the underlying mechanism
+(below) is now understood well enough to predict which will hold at other
+sizes.
+
+ROOT CAUSE of the hybrid-LAS reversal (verified via injection_path_used,
+same point/stochastic subset used above, so directly comparable):
+  n=8,  fidelity_driven_greedy wins:  nsga2 23-24/25, nsga3 24/25, smsemoa 24/25
+  n=12, fidelity_driven_greedy wins:  nsga2  7/25,    nsga3  5/25, smsemoa  4/25
+At n=8, fidelity_driven_injection's greedy pass produces the final circuit
+in 92-96% of runs regardless of hybrid_las -- consistent with the existing
+"greedy pass dominates" finding from "RESEARCH ANGLE CHOSEN AND
+IMPLEMENTED" (48/50 there was the broader Phase-2-baseline figure; this
+225-run point/stochastic subset gives the same picture at finer
+resolution). At n=12 that flips: the injection_method's own (stochastic)
+result wins in ~79-84% of runs instead, so more of a run's final fidelity
+comes from the state fidelity_driven_injection's greedy pass started
+from -- i.e. the post-block-optimization circuit, which is exactly what
+hybrid-LAS improves. This is a mechanistic explanation, not just a
+correlation: it directly predicts hybrid-LAS mattering more as n grows
+past 8, and is consistent with "HYPERVOLUME COMPARABILITY"'s independent
+finding that hybrid_las never touches the recorded Pareto front (`pop`),
+only the final individual fed into injection -- the more that
+individual's own quality matters downstream, the more hybrid-LAS's gain
+shows through. Not root-caused further: WHY fidelity_driven_injection's
+greedy pass wins less often at larger n (e.g. whether its fixed
+--fidelity-driven-max-trials=300 budget covers proportionally less search
+space as block circuits grow, or whether stochastic_injection's
+solutions simply get harder to beat as blocks get more complex) -- open.
+
+Not done / open:
+- Not extended to each family's ceiling size (16-20q) -- n=12 only, per
+  scoped-down decision above. The mechanism found here (greedy-pass
+  dominance share) predicts hybrid-LAS's advantage should persist or grow
+  further at ceiling sizes, but not confirmed.
+- generate_report.py's fair-HV mutation/hybrid-LAS ablation tables
+  (table_fair_hv_mutation_ablation/table_fair_hv_hybrid_las_ablation) are
+  hardcoded to n=8 run_ids (`_8q_stochastic_` string, BASELINE_N_QUBITS
+  filter) -- not parameterized to also cover n=12. This write-up used
+  results_master.csv's existing adaptive mean_hv/fidelity_final columns
+  directly rather than extending the report generator; the n=8-vs-n=12
+  fair-HV comparison (e.g. does swap_add's coverage-vs-bloat tradeoff
+  also hold at n=12) is unanswered.
+- WHY fidelity_driven_injection's greedy-pass win rate drops from n=8 to
+  n=12 (see ROOT CAUSE paragraph) -- not investigated further.
+- injection_method=sa not covered by this extension (matches the
+  original n=8 ablation's own scope, which was stochastic-only).
+
+UPDATE (same day): extended generate_report.py to cover this data --
+table_mutation_ablation/table_hybrid_las_ablation and their fair-HV
+counterparts now take an n_qubits parameter (default unchanged, still 8);
+main() additionally writes mutation_ablation_n12/hybrid_las_ablation_n12
+(+fair_hv_ variants) tables and figures, closing the "hardcoded to n=8"
+gap noted above. Confirms two more n=8 findings hold at n=12: swap_add
+still gives the highest fair_mean_hv for all 3 algorithms (nsga2 0.883,
+nsga3 0.863, smsemoa 0.894, vs. point's/swap_add_delete's ~0.73-0.81), and
+fair_mean_hv is still exactly identical between hybrid_las False/True per
+algorithm (structural, not a coincidence -- see "HYPERVOLUME
+COMPARABILITY"'s explanation, which is scale-independent by construction).
+algorithm_comparison/fair_hv_comparison/injection_method/scaling tables
+remain n=8-only in the report generator -- not extended, out of scope for
+this pass (those axes' n=12+ coverage already exists as hand-built tables
+in "SCALING VERIFICATION" and earlier sections, just not wired into
+generate_report.py).
