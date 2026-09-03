@@ -1,6 +1,6 @@
 STATUS REPORT
 Quantum Circuit Optimization with Genetic Algorithms (PFE)
-Date: 2026-09-01
+Date: 2026-09-03
 
 =====================================================================
 OBJECTIVE
@@ -129,6 +129,19 @@ WHERE WE ARE
   consistent with current codebase defaults. See logs.txt's "SCALING
   VERIFICATION ... PLUS RUNS/ DATA-HYGIENE CLEANUP" for the full
   breakdown.
+- Answered next-research-point #6 below (2026-09-03): extended sa-
+  injection to n=12 for all 3 algorithms (75 new runs, 0 failed;
+  results_master.csv now 825 rows). fidelity_final still ties almost
+  exactly between sa/stochastic (67/75 circuit x seed x algorithm pairs
+  bit-identical), but the reason is stronger than at n=8: the greedy
+  fidelity_driven_injection pass that used to explain the tie at n=8
+  (dominating 92-96% of runs) only dominates 16-28% of runs at n=12 --
+  sa and stochastic are independently converging to the same fidelity in
+  the majority of runs, not just being overridden identically. Wall-clock
+  flips from n=8's mixed picture (sa cheaper under nsga2, stochastic
+  cheaper under nsga3) to sa being uniformly slower than stochastic at
+  n=12, for all 3 algorithms and all 5 circuits (14-38% slower per cell).
+  See logs.txt's "SA-INJECTION EXTENDED TO n=12".
 
 =====================================================================
 NEXT RESEARCH POINTS
@@ -159,7 +172,11 @@ NEXT RESEARCH POINTS
    injection's greedy pass dominating far less often at n=12 (~21% of
    runs vs. 92-96% at n=8), so hybrid-LAS's per-block gains propagate
    into the final circuit much more often. See logs.txt.
-6. sa-injection at scale (n=12+) has zero current data for any
-   algorithm after this cleanup removed 4 orphaned single-seed probes
-   -- open axis, not yet prioritized against items 3/5 (ceiling-size
-   extension) above.
+6. DONE (2026-09-03): sa-injection extended to n=12 for all 3
+   algorithms (75 new runs, 0 failed). fidelity_final ties with
+   stochastic nearly exactly (67/75 bit-identical pairs), now for a
+   stronger reason than at n=8 (independent convergence, not just
+   greedy-pass override). Wall-clock flips to sa being uniformly
+   slower than stochastic at n=12 (14-38% per cell), reversing n=8's
+   mixed nsga2/nsga3 picture. Ceiling sizes (16-20q) for sa-injection
+   remain open -- same gap as items 3/5's ceiling-size extension.

@@ -1,8 +1,22 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-09-01
+Last updated: 2026-09-03
 
 Recent activity (newest first; see the dated section below for full detail):
+- 2026-09-03: Extended sa-injection to n=12 for all 3 algorithms
+  (status.txt's next-research-point #6) -- 75 new runs, 0 failed. Headline:
+  fidelity_final ties between sa/stochastic survives from n=8 to n=12 (67/75
+  circuit x seed x algorithm pairs bit-identical, remaining 8 differ by
+  <7.2e-05 -- floating-point/scheduling noise, not systematic) even though
+  fidelity_driven_injection's greedy pass now wins only ~16-28% of runs at
+  n=12 (vs 92-96% at n=8) -- i.e. sa and stochastic reach the same fidelity
+  even in the majority of runs where the injection method's own result wins,
+  not just because the greedy pass papers over the difference. Wall-clock
+  reverses from n=8's mixed picture (sa cheaper under nsga2, stochastic
+  cheaper under nsga3): at n=12, sa is uniformly SLOWER than stochastic
+  across all 3 algorithms and all 5 circuits (14-38% slower per
+  circuit/algorithm cell, 21-28% slower in the per-algorithm mean). See
+  "SA-INJECTION EXTENDED TO n=12".
 - 2026-09-01: Extended the mutation-scheme and hybrid-LAS ablations
   (status.txt's next-research-point #5) from n=8-only to n=12, all 3
   algorithms -- 225 new runs, 0 failed. Two findings beyond n=8: (1) the
@@ -971,3 +985,81 @@ remain n=8-only in the report generator -- not extended, out of scope for
 this pass (those axes' n=12+ coverage already exists as hand-built tables
 in "SCALING VERIFICATION" and earlier sections, just not wired into
 generate_report.py).
+
+=====================================================================
+SA-INJECTION EXTENDED TO n=12 (2026-09-03)
+=====================================================================
+Picked up status.txt's NEXT RESEARCH POINTS #6: sa-injection had zero data
+at n=12+ for any algorithm (the only n=12+ sa runs that ever existed were 4
+single-seed NSGA-II-only probes moved to runs_backup_orphaned_sa_scale_
+probes/ during the 2026-08-31 data-hygiene pass). All existing sa-vs-
+stochastic comparisons (see "NSGA-III ADDED AS THIRD PER-BLOCK OPTIMIZER"
+and its smsemoa+sa follow-up) were n=8-only.
+
+Method: run_sweep.py --injection-methods sa --n-qubits 12
+--block-algorithms nsga2 smsemoa nsga3 --n-seeds 5 (5 circuits x 5 seeds x
+3 algorithms, point mutation, no hybrid-LAS -- mirrors the existing
+stochastic n=12 baseline exactly). 75 new runs, 0 failed. results_master.csv
+now 825 rows (up from 750).
+
+RESULT 1 (fidelity ties, and why they're stronger evidence than the n=8
+version): paired fidelity_final by (circuit, seed, block_algorithm), sa vs
+stochastic:
+  nsga2:   mean 0.108400 (sa) vs 0.108398 (stochastic)
+  nsga3:   mean 0.083380 (sa) vs 0.083379 (stochastic)
+  smsemoa: mean 0.094718 (sa) vs 0.094718 (stochastic)
+67/75 pairs bit-identical (<1e-9); the remaining 8 differ by at most
+7.13e-05 (mean abs diff 1.18e-06) -- consistent with float/parallel-
+scheduling noise, not a systematic gap. This looks like the same "injection
+method barely matters" finding already reported at n=8 (see "NSGA-III
+ADDED", nsga3's sa/stochastic fidelity_final bit-identical there too), but
+the mechanism is different and the n=12 result is the stronger claim: at
+n=8, fidelity_driven_injection's greedy pass wins 92-96% of runs regardless
+of injection_method, so the tie was largely explained by both paths being
+overridden by the same third path. At n=12, injection_path_used shows the
+greedy pass winning only 16/25 (nsga2 7, nsga3 5, smsemoa 4 -- more
+precisely 28%/20%/16%) of runs -- IDENTICAL win counts on the sa and
+stochastic sides of the same algorithm (confirming greedy-dominance rate is
+driven by pre-injection candidate quality, not by which injection method
+ran) -- yet fidelity_final still ties in the ~72-84% of runs where sa's or
+stochastic's own result is what's kept. So sa and stochastic aren't just
+being overridden identically at n=12 -- they're independently converging to
+the same fidelity when each gets to keep its own result. Not root-caused
+further: whether this is because sa_injection's simulated-annealing energy
+and stochastic_injection's greedy accept-if-improves rule both end up
+accepting the same set of inter-block gates in practice at this circuit/
+size regime (plausible, not verified gate-by-gate).
+
+RESULT 2 (wall-clock reverses from n=8's mixed picture): at n=8, sa was
+cheaper than stochastic under nsga2 (37.17s vs 52.41s) but slower under
+nsga3 (33.99s vs 25.34s) -- attributed there to nsga3's faster block-
+optimization stage exposing sa_injection's roughly-constant own cost more.
+At n=12, sa is uniformly SLOWER than stochastic for all 3 algorithms:
+  block_algorithm  sa (mean s)  stochastic (mean s)  sa slower by
+  nsga2                 113.71                 93.68         21.4%
+  nsga3                 115.19                 89.70         28.4%
+  smsemoa               113.86                 92.89         22.6%
+Per-circuit breakdown shows the gap holds everywhere (5.7%-37.9% slower,
+every circuit x algorithm cell), largest in absolute terms for qft
+(48-56s slower) and smallest for weak_random (6.5-12s). Not root-caused
+further: whether sa_injection's simulated-annealing loop structurally scales
+worse than stochastic_injection's per-trial accept/reject as block circuits
+grow from n=8 to n=12 (more candidate inter-block gates to anneal over), or
+whether this is specific to injection_fidelity_exact_threshold=7/samples=8
+(the 2026-08-31 re-benchmark, whose defaults this sweep used) interacting
+differently with sa's energy-check loop than with stochastic's -- not
+investigated, no A/B against the pre-2026-08-31 threshold defaults was run.
+
+Not done / open:
+- Only n=12 covered, matching the recommended scope for this pass (see
+  status.txt) -- ceiling sizes (16-20q) for sa-injection remain open, same
+  gap that already exists for the mutation-scheme/hybrid-LAS ablations
+  (see "MUTATION-SCHEME AND HYBRID-LAS ABLATIONS EXTENDED TO n=12").
+- WHY sa's wall-clock disadvantage flips from mixed-at-n=8 to uniform-at-
+  n=12 -- not root-caused (see RESULT 2's open question above).
+- WHY fidelity_final ties even outside greedy-pass dominance at n=12 -- not
+  verified at the gate level (see RESULT 1's open question above).
+- generate_report.py's injection_method table remains n=8-only (already
+  noted as out-of-scope in the prior UPDATE above) -- this n=12 sa-vs-
+  stochastic comparison exists only as this hand-built write-up and in
+  results_master.csv, not wired into the report generator.
