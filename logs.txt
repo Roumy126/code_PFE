@@ -3,6 +3,15 @@ Generated: 2026-08-18
 Last updated: 2026-09-03
 
 Recent activity (newest first; see the dated section below for full detail):
+- 2026-09-03: Kicked off the n=16 ceiling-size extension of the mutation-
+  scheme/hybrid-LAS ablations and the sa-injection comparison (closing the
+  ceiling-size gap flagged open in the n=12 write-ups below) -- paused
+  partway through by user request, to resume the next session. Mutation-
+  scheme phase 164/225 configs done (0 failed) when paused: weak_random/
+  qaoa_maxcut/w_state complete, qft partial, hw_efficient_ansatz not
+  started; hybrid-LAS and sa-injection phases not yet started. See
+  "CEILING-SIZE (n=16) SWEEP FOR MUTATION/HYBRID-LAS/SA-INJECTION --
+  STARTED, PAUSED".
 - 2026-09-03: Extended sa-injection to n=12 for all 3 algorithms
   (status.txt's next-research-point #6) -- 75 new runs, 0 failed. Headline:
   fidelity_final ties between sa/stochastic survives from n=8 to n=12 (67/75
@@ -1063,3 +1072,69 @@ Not done / open:
   noted as out-of-scope in the prior UPDATE above) -- this n=12 sa-vs-
   stochastic comparison exists only as this hand-built write-up and in
   results_master.csv, not wired into the report generator.
+
+=====================================================================
+CEILING-SIZE (n=16) SWEEP FOR MUTATION/HYBRID-LAS/SA-INJECTION --
+STARTED, PAUSED (2026-09-03)
+=====================================================================
+Picked up the ceiling-size gap flagged open in both "MUTATION-SCHEME AND
+HYBRID-LAS ABLATIONS EXTENDED TO n=12" and "SA-INJECTION EXTENDED TO n=12"
+above: those three axes (mutation scheme, hybrid-LAS, sa-vs-stochastic
+injection) existed only at n=8/n=12 for all 3 block algorithms, while the
+baseline algorithm comparison itself already had ceiling-size (16-20q)
+coverage (see "SCALING VERIFICATION").
+
+Method: three staged run_sweep.py invocations, same design as the n=12
+passes, all at a uniform --n-qubits 16 (not each family's own ceiling --
+qaoa_maxcut's ceiling IS 16, and mixing n=16/n=20 into one ablation table
+across families would confound the comparison, so 16 was picked as the
+shared size for this round rather than re-running qaoa_maxcut in isolation
+at a different size from the other four):
+  1. Mutation-scheme ablation: --block-algorithms nsga2 smsemoa nsga3
+     --mutation-schemes point swap_add swap_add_delete --hybrid-las-options 0
+     --injection-methods stochastic --n-seeds 5 (225 configs; 15 already
+     existed from the earlier qaoa_maxcut-ceiling scaling sweep's point/las0
+     baseline).
+  2. Hybrid-LAS ablation: same grid with --mutation-schemes point
+     --hybrid-las-options 0 1 (150 configs, mostly overlapping phase 1's
+     point/las0 cells -- run_sweep.py's existing-metrics.json skip makes
+     this a no-op re-check, not duplicate compute).
+  3. sa-injection: --injection-methods sa --n-qubits 16 --block-algorithms
+     nsga2 smsemoa nsga3 --n-seeds 5, point mutation, no hybrid-LAS
+     (75 configs, all new -- sa-injection has no n=16 data of any kind yet).
+Run strictly sequentially, not concurrently: every BLOCK_OPTIMIZERS entry
+always uses joblib.Parallel(-1) (all cores, no CLI throttle, per CLAUDE.md's
+explicit note not to add one without asking) -- overlapping sweeps would
+just contend for the same cores rather than run in true parallel.
+
+PAUSED (same day, user request, to resume in a later session): stopped
+after phase 1 (mutation-scheme ablation) partially completed, before
+phases 2/3 started. State at pause, verified against runs/*/metrics.json
+directly (not just the sweep's own stdout):
+  circuit               done/total (of 15 = 3 mutation schemes x 5 seeds, per algorithm)
+  weak_random           45/45 (nsga2/smsemoa/nsga3 all complete)
+  qaoa_maxcut           45/45 (nsga2/smsemoa/nsga3 all complete)
+  w_state               45/45 (nsga2/smsemoa/nsga3 all complete)
+  qft                   29/45 (nsga2 15/15, smsemoa 14/15, nsga3 0/15)
+  hw_efficient_ansatz    0/45 (not started)
+164/225 phase-1 configs done, 0 failed. One run was mid-optimization when
+the background process was killed (qft/smsemoa/swap_add_delete/seed4) --
+it had no metrics.json (only partial circuit-diagram PNGs from early
+pipeline stages), so it wasn't at risk of being mistaken for complete by
+run_sweep.py's resume check (which keys on metrics.json existing, not on
+directory existence); its partial output directory was removed as
+just-generated debris, not real data. Phases 2 (hybrid-LAS) and 3
+(sa-injection) were never started.
+
+Not done / open:
+- Resume by re-running the same three run_sweep.py commands above --
+  the skip-if-metrics.json-exists logic means this picks up exactly where
+  it left off (61 remaining phase-1 configs: qft's last smsemoa seed +
+  all of nsga3, plus all of hw_efficient_ansatz), then proceeds to phases
+  2 and 3 automatically since they were chained in the same invocation.
+- No results/analysis yet -- 164 rows is a partial, uneven-per-circuit
+  sample (three families complete, two not even started for two of three
+  algorithms), not something to draw any n=16 conclusion from yet.
+- generate_report.py not yet extended with n=16 table/figure variants
+  (mirroring the n=12 additions) -- deferred until the sweep actually
+  finishes, per the same reasoning as the n=12 UPDATE entry above.

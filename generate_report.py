@@ -90,10 +90,10 @@ BASELINE_N_QUBITS = 8
 # Tables
 # ---------------------------------------------------------------------------
 
-def table_algorithm_comparison(df: pd.DataFrame) -> pd.DataFrame:
-    """NSGA-II vs SMS-EMOA at baseline settings (point mutation, no hybrid LAS)."""
+def table_algorithm_comparison(df: pd.DataFrame, n_qubits: int = BASELINE_N_QUBITS) -> pd.DataFrame:
+    """NSGA-II vs SMS-EMOA vs NSGA-III at baseline settings (point mutation, no hybrid LAS)."""
     baseline = df[
-        (df["n_qubits"] == BASELINE_N_QUBITS)
+        (df["n_qubits"] == n_qubits)
         & (~df["is_legacy_schema"])
         & (df["mutation_scheme"] == "point")
         & (df["hybrid_las"] == False)
@@ -200,10 +200,10 @@ def _aggregate_fair_hv(rows: list, group_cols: list) -> pd.DataFrame:
     ).reset_index()
 
 
-def table_fair_hv_comparison(runs_dir: Path) -> pd.DataFrame:
+def table_fair_hv_comparison(runs_dir: Path, n_qubits: int = BASELINE_N_QUBITS) -> pd.DataFrame:
     """Fair (shared fixed reference point) hypervolume at the baseline settings --
     mirrors table_algorithm_comparison's filter, see _pooled_fair_hv_rows' docstring."""
-    rows = _pooled_fair_hv_rows(runs_dir, mutation_scheme="point", hybrid_las=False)
+    rows = _pooled_fair_hv_rows(runs_dir, mutation_scheme="point", hybrid_las=False, n_qubits=n_qubits)
     return _aggregate_fair_hv(rows, ["block_algorithm"])
 
 
@@ -405,6 +405,11 @@ def main(argv=None):
     tables = {
         "algorithm_comparison": table_algorithm_comparison(df),
         "fair_hv_comparison": table_fair_hv_comparison(args.runs_dir),
+        # n=12 algorithm comparison (added alongside n=12 mutation/hybrid-LAS coverage,
+        # see logs.txt's "SCALING VERIFICATION: NSGA-III/SMS-EMOA AT n=12 AND FAMILY
+        # CEILINGS" -- these numbers previously only existed as a hand-built table there).
+        "algorithm_comparison_n12": table_algorithm_comparison(df, n_qubits=12),
+        "fair_hv_comparison_n12": table_fair_hv_comparison(args.runs_dir, n_qubits=12),
         "mutation_ablation": table_mutation_ablation(df),
         "fair_hv_mutation_ablation": table_fair_hv_mutation_ablation(args.runs_dir),
         "hybrid_las_ablation": table_hybrid_las_ablation(df),
@@ -443,6 +448,15 @@ def main(argv=None):
         fair_hv = tables["fair_hv_comparison"].set_index("block_algorithm")["fair_mean_hv"]
         fig_bar(fair_hv, title="Hypervolume (fair: shared fixed reference point)",
                 ylabel="fair_mean_hv", out_path=figures_dir / "algorithm_hypervolume_fair.png")
+
+    algo_n12 = tables["algorithm_comparison_n12"].set_index("block_algorithm")
+    if not algo_n12.empty:
+        fig_bar(algo_n12["fidelity_final"], title="Fidelity by block algorithm (n=12)",
+                ylabel="fidelity_final", out_path=figures_dir / "algorithm_fidelity_n12.png")
+    if not tables["fair_hv_comparison_n12"].empty:
+        fair_hv_n12 = tables["fair_hv_comparison_n12"].set_index("block_algorithm")["fair_mean_hv"]
+        fig_bar(fair_hv_n12, title="Hypervolume (fair, n=12): shared fixed reference point",
+                ylabel="fair_mean_hv", out_path=figures_dir / "algorithm_hypervolume_fair_n12.png")
 
     fig_grouped_bar(tables["mutation_ablation"], x="mutation_scheme", hue="block_algorithm",
                      y="fidelity_final", title="Mutation-scheme ablation",
