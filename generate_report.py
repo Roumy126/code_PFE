@@ -38,6 +38,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pymoo.indicators.hv import HV as _PymooHV
 
+import run_sweep as _run_sweep  # reuse run_id_for/CIRCUIT_FIDELITY_SETTINGS (single source of
+# truth for run_id construction) instead of re-deriving it here -- required above
+# fidelity_exact_threshold (13, run_experiment.py's default), where CIRCUIT_FIDELITY_SETTINGS
+# appends a per-family suffix (e.g. qaoa_maxcut/qft get "_statevector", w_state/
+# hw_efficient_ansatz get "_es32_sh2048") that a hardcoded f-string would silently miss.
+
 # Fixed categorical order (dataviz skill reference palette) -- assign by
 # identity/order, never re-cycle or reassign per chart.
 CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
@@ -153,12 +159,22 @@ def _pooled_fair_hv_rows(runs_dir: Path, mutation_scheme: str, hybrid_las: bool,
     """
     rows = []
     n_mismatched = 0
-    las_flag = "las1" if hybrid_las else "las0"
     for circuit in FAIR_HV_CIRCUITS:
         for seed in range(FAIR_HV_N_SEEDS):
             per_algo_blocks = {}
+            fidelity_settings = (
+                _run_sweep.CIRCUIT_FIDELITY_SETTINGS.get(circuit, {}) if n_qubits > 13 else {}
+            )
             for algo in FAIR_HV_ALGORITHMS:
-                run_id = f"{circuit}_{n_qubits}q_stochastic_{algo}_{mutation_scheme}_{las_flag}_g100_p100_seed{seed}"
+                run_id = _run_sweep.run_id_for({
+                    "circuit": circuit, "n_qubits": n_qubits, "injection_method": "stochastic",
+                    "block_algorithm": algo, "mutation_scheme": mutation_scheme,
+                    "hybrid_las": hybrid_las, "generations": 100, "pop_size": 100, "seed": seed,
+                    "fidelity_exact_threshold": None, "injection_fidelity_exact_threshold": None,
+                    "fidelity_approximate_backend": fidelity_settings.get("fidelity_approximate_backend"),
+                    "fidelity_echo_samples": fidelity_settings.get("fidelity_echo_samples"),
+                    "fidelity_echo_shots": fidelity_settings.get("fidelity_echo_shots"),
+                })
                 metrics_path = runs_dir / run_id / "metrics.json"
                 if not metrics_path.exists():
                     continue
@@ -421,6 +437,15 @@ def main(argv=None):
         "fair_hv_mutation_ablation_n12": table_fair_hv_mutation_ablation(args.runs_dir, n_qubits=12),
         "hybrid_las_ablation_n12": table_hybrid_las_ablation(df, n_qubits=12),
         "fair_hv_hybrid_las_ablation_n12": table_fair_hv_hybrid_las_ablation(args.runs_dir, n_qubits=12),
+        # n=16 mutation-scheme/hybrid-LAS ablations (added 2026-09-04, see logs.txt's
+        # "CEILING-SIZE (n=16) SWEEP FOR MUTATION/HYBRID-LAS/SA-INJECTION" -- picked as the
+        # shared ceiling size across all 5 families for this round, same reasoning as the
+        # sweep itself). sa-injection at n=16 is not wired in here, same out-of-scope
+        # decision as the n=12 UPDATE's injection_method table.
+        "mutation_ablation_n16": table_mutation_ablation(df, n_qubits=16),
+        "fair_hv_mutation_ablation_n16": table_fair_hv_mutation_ablation(args.runs_dir, n_qubits=16),
+        "hybrid_las_ablation_n16": table_hybrid_las_ablation(df, n_qubits=16),
+        "fair_hv_hybrid_las_ablation_n16": table_fair_hv_hybrid_las_ablation(args.runs_dir, n_qubits=16),
         "injection_method_comparison": table_injection_method_comparison(df),
         "injection_method_legacy": table_injection_method_legacy(df),
         "scaling": table_scaling(df),
@@ -489,6 +514,22 @@ def main(argv=None):
         fig_grouped_bar(tables["fair_hv_hybrid_las_ablation_n12"], x="block_algorithm", hue="hybrid_las",
                          y="fair_mean_hv", title="Hybrid GA+LAS ablation (n=12): fair hypervolume",
                          ylabel="fair_mean_hv", out_path=figures_dir / "hybrid_las_ablation_fair_hv_n12.png")
+
+    fig_grouped_bar(tables["mutation_ablation_n16"], x="mutation_scheme", hue="block_algorithm",
+                     y="fidelity_final", title="Mutation-scheme ablation (n=16)",
+                     ylabel="fidelity_final", out_path=figures_dir / "mutation_ablation_n16.png")
+    if not tables["fair_hv_mutation_ablation_n16"].empty:
+        fig_grouped_bar(tables["fair_hv_mutation_ablation_n16"], x="mutation_scheme", hue="block_algorithm",
+                         y="fair_mean_hv", title="Mutation-scheme ablation (n=16): fair hypervolume",
+                         ylabel="fair_mean_hv", out_path=figures_dir / "mutation_ablation_fair_hv_n16.png")
+
+    fig_grouped_bar(tables["hybrid_las_ablation_n16"], x="block_algorithm", hue="hybrid_las",
+                     y="fidelity_final", title="Hybrid GA+LAS ablation (n=16)",
+                     ylabel="fidelity_final", out_path=figures_dir / "hybrid_las_ablation_n16.png")
+    if not tables["fair_hv_hybrid_las_ablation_n16"].empty:
+        fig_grouped_bar(tables["fair_hv_hybrid_las_ablation_n16"], x="block_algorithm", hue="hybrid_las",
+                         y="fair_mean_hv", title="Hybrid GA+LAS ablation (n=16): fair hypervolume",
+                         ylabel="fair_mean_hv", out_path=figures_dir / "hybrid_las_ablation_fair_hv_n16.png")
 
     fig_grouped_bar(tables["injection_method_comparison"], x="block_algorithm", hue="injection_method",
                      y="fidelity_final", title="Injection method: fidelity",

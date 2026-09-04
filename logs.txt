@@ -1,8 +1,31 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-09-03
+Last updated: 2026-09-04
 
 Recent activity (newest first; see the dated section below for full detail):
+- 2026-09-04: Resumed and completed the n=16 ceiling-size sweep paused
+  2026-09-03 (211 new runs, 0 failed; results_master.csv now 1185 rows).
+  Two findings hold at all 3 tested sizes (n=8/12/16): nsga2 keeps its
+  same mutation-scheme ranking throughout, and swap_add keeps the highest
+  fair hypervolume for all 3 algorithms. Headline finding, and a genuine
+  surprise: fidelity_driven_injection's greedy-pass win rate, which the
+  n=12 write-up found dropping sharply from n=8 (92-96% -> 16-28%) and
+  predicted would keep dropping or hold at ceiling sizes, instead SURGES
+  BACK UP at n=16 (72-88%) for all 3 algorithms -- not monotonic in n,
+  not root-caused (candidate hypothesis: a per-family fidelity-backend
+  switch that activates only above n=13, untested). This complicates the
+  n=12 hybrid-LAS mechanism story -- nsga2's hybrid-LAS benefit reverts
+  toward its n=8 "wash" in step with this reversal, but nsga3/smsemoa's
+  doesn't, despite their greedy-win-rates reversing just as sharply.
+  sa-injection's n=12 findings (fidelity ties, sa uniformly slower) both
+  extend cleanly to n=16. Also extended generate_report.py with n=16
+  mutation-scheme/hybrid-LAS tables+figures (mirroring the n=12 UPDATE),
+  fixing a latent bug along the way: the fair-HV run_id lookup would have
+  silently returned empty rows at n=16 for 4/5 circuit families (missing
+  CIRCUIT_FIDELITY_SETTINGS' per-family run_id suffix, harmless below
+  n=13 where the suffix doesn't apply). See "CEILING-SIZE (n=16) SWEEP
+  FOR MUTATION/HYBRID-LAS/SA-INJECTION -- RESUMED, COMPLETED, AND
+  ANALYZED".
 - 2026-09-03: Kicked off the n=16 ceiling-size extension of the mutation-
   scheme/hybrid-LAS ablations and the sa-injection comparison (closing the
   ceiling-size gap flagged open in the n=12 write-ups below) -- paused
@@ -1138,3 +1161,162 @@ Not done / open:
 - generate_report.py not yet extended with n=16 table/figure variants
   (mirroring the n=12 additions) -- deferred until the sweep actually
   finishes, per the same reasoning as the n=12 UPDATE entry above.
+
+=====================================================================
+CEILING-SIZE (n=16) SWEEP FOR MUTATION/HYBRID-LAS/SA-INJECTION --
+RESUMED, COMPLETED, AND ANALYZED (2026-09-04)
+=====================================================================
+Resumed the sweep paused mid-run in "CEILING-SIZE (n=16) SWEEP ... STARTED,
+PAUSED" above. Re-ran the same three staged run_sweep.py invocations
+unchanged; the metrics.json skip-check picked up exactly where phase 1 left
+off (164/225 done) and proceeded through phases 2/3 automatically without
+further intervention. Total: 211 new runs across the three phases (61
+mutation-scheme + 75 hybrid-LAS + 75 sa-injection), 0 failed.
+results_master.csv regenerated: 1185 rows (up from 825), 375 of them at
+n=16 (75 per circuit: 300 stochastic + 75 sa).
+
+Phase-by-phase sweep completion (run_sweep.py's own tallies):
+  1. Mutation-scheme ablation: 61 run, 164 skipped, 0 failed (of 225 total).
+  2. Hybrid-LAS ablation: 75 run, 75 skipped, 0 failed (of 150 total).
+  3. sa-injection: 75 run, 0 skipped, 0 failed (of 75 total, all new).
+
+RESULT 1 (mutation-scheme ranking, n=16 vs n=8/n=12): mean fidelity_final,
+25 runs/cell (5 circuits x 5 seeds), point/las0/stochastic baseline unless
+noted:
+  nsga2:   point 0.0843 > swap_add_delete 0.0688 > swap_add 0.0619
+  nsga3:   swap_add_delete 0.0682 ~= point 0.0666 > swap_add 0.0560
+  smsemoa: point 0.0724 > swap_add 0.0706 > swap_add_delete 0.0565
+Comparing all three sizes: nsga2 keeps the SAME point > swap_add_delete >
+swap_add ordering at n=8, n=12, AND n=16 -- the one algorithm whose ranking
+never moves. nsga3 and smsemoa each reordered once, between n=8 and n=12
+(see "MUTATION-SCHEME AND HYBRID-LAS ABLATIONS EXTENDED TO n=12"), then
+HOLD that same n=12 ordering unchanged at n=16 (nsga3: swap_add_delete >
+point > swap_add both times; smsemoa: point > swap_add > swap_add_delete
+both times). Refines "no universally-best mutation operator, not stable
+across scale" to a more specific shape: for nsga3/smsemoa the ranking
+appears to settle by n=12 and hold at the next size tested, rather than
+continuing to drift -- though only one further size point (n=16) confirms
+that, not proof of a general stabilization.
+
+Fair (shared-reference) hypervolume, n=16: swap_add still gives the highest
+fair_mean_hv for all 3 algorithms (nsga2 0.876, nsga3 0.859, smsemoa 0.894),
+same as at n=8/n=12 -- now confirmed at every tested size.
+
+RESULT 2 (hybrid-LAS, n=16 -- the surprising one): paired by circuit+seed,
+point mutation, stochastic injection, 25 pairs/algorithm:
+  nsga2:   13/25 improved (52%), mean delta +0.00299
+  nsga3:   20/25 improved (80%), mean delta +0.00407
+  smsemoa: 21/25 improved (84%), mean delta +0.00254
+Compare to n=12 (nsga2 22/25=88%, +0.00273; nsga3 24/25=96%, +0.00334;
+smsemoa 22/25=88%, +0.00361) and n=8 (nsga2 16/25=64% but mean delta
+NEGATIVE -0.00075, i.e. a wash; nsga3 21/25=84%, +0.0056; smsemoa 18/25=72%,
++0.00186): nsga2's improved-fraction drops back down to a near-coin-flip
+(52%) at n=16, partially reverting toward its n=8 "wash" (though the mean
+delta stays positive here, unlike n=8's negative one). nsga3 and smsemoa
+both stay strongly positive (80%/84% improved), continuing their n=12
+behavior rather than reverting.
+
+ROOT CAUSE, and why it complicates rather than confirms the n=12 story:
+checked injection_path_used (same method as "MUTATION-SCHEME AND
+HYBRID-LAS ABLATIONS EXTENDED TO n=12"'s ROOT CAUSE section) for the
+point/stochastic subset across all three sizes now tested:
+  fidelity_driven_greedy win rate   n=8      n=12     n=16
+  nsga2                             92%      28%      88%
+  nsga3                             96%      20%      72%
+  smsemoa                           96%      16%      84%
+This is NOT monotonic in n. The n=12 write-up's mechanistic story ("greedy
+pass dominates less as n grows, so hybrid-LAS's per-block gains propagate
+into fidelity_final more often") explicitly predicted this should persist
+or grow further at ceiling sizes ("Not extended... but the mechanism found
+here... predicts hybrid-LAS's advantage should persist or grow further at
+ceiling sizes, but not confirmed") -- instead greedy-pass dominance SURGES
+BACK UP at n=16, most of the way back to n=8's level, for all three
+algorithms. nsga2's hybrid-LAS fraction-improved (52%) tracks this reversal
+closely (its greedy-win-rate at n=16, 88%, is the closest of the three to
+n=8's 92%) -- consistent with the mechanism. But nsga3/smsemoa's
+hybrid-LAS fraction-improved stays high (80%/84%) DESPITE their own
+greedy-win-rates also rising sharply (20%->72%, 16%->84%) -- inconsistent
+with a pure "greedy-dominance-rate predicts hybrid-LAS benefit" story, or
+at least incomplete for those two algorithms. Not root-caused further: why
+greedy-pass dominance is non-monotonic in n at all (candidate hypothesis,
+UNTESTED: qft/w_state/hw_efficient_ansatz's fidelity-backend settings
+(CIRCUIT_FIDELITY_SETTINGS -- statevector or raised echo-samples/shots)
+only activate above fidelity_exact_threshold=13, i.e. exactly between n=12
+and n=16 for 3 of 5 families -- a fidelity-estimator switch could shift
+which path's fidelity reads higher independent of which candidate is
+actually better, confounding this comparison the same way the injection_
+fidelity_exact_threshold confound did at n=12, see "SCALING VERIFICATION"'s
+RESULT 2); why nsga3/smsemoa don't track the reversal the way nsga2 does.
+Flag this prominently in the paper as an open, unresolved, and
+mechanistically incomplete result -- the "greedy pass dominates less at
+larger n" claim from the n=12 write-up should NOT be generalized past n=12
+without this caveat.
+
+RESULT 3 (sa-injection, n=16): paired fidelity_final by (circuit, seed,
+block_algorithm), sa vs stochastic, 25 pairs/algorithm:
+  nsga2:   mean 0.084278 (sa) vs 0.084278 (stochastic)
+  nsga3:   mean 0.066559 (sa) vs 0.066555 (stochastic)
+  smsemoa: mean 0.072439 (sa) vs 0.072439 (stochastic)
+74/75 pairs bit-identical (<1e-9); the one exception differs by 9.16e-05 --
+same order of magnitude as n=8/n=12's noise-level differences, not a
+systematic gap. The fidelity-tie finding now holds at all three tested
+sizes (n=8, 12, 16), even though the injection_path_used split underneath
+it is NOT stable across those sizes (see RESULT 2's table above -- the same
+92%/28%/88% greedy-win-rates apply here, since fidelity_driven_injection's
+competition is identical regardless of which injection_method supplied the
+other candidate).
+Wall-clock: sa remains uniformly SLOWER than stochastic at n=16, same
+direction as n=12 (reversing n=8's mixed nsga2/nsga3 picture):
+  block_algorithm  sa (mean s)  stochastic (mean s)  sa slower by
+  nsga2                  74.35                 62.07         19.9%
+  nsga3                  71.74                 58.64         24.2%
+  smsemoa                75.93                 65.17         18.0%
+Magnitude (18-24% slower) is comparable to n=12's (21-28%) -- this
+direction now looks stable from n=12 onward. Worth noting explicitly: the
+two n=12 sa-injection headlines ("fidelity ties" and "sa is uniformly
+slower") turn out to have different robustness once a third size is
+checked -- the wall-clock direction held, but the fidelity-tie's own
+underlying mechanism (injection_path_used split) did not stay put, it just
+happened to still produce a tie at n=16 too (both paths converging to
+similar fidelity regardless of which one "wins" more often).
+
+UPDATE (same day): extended generate_report.py to cover the mutation-scheme
+and hybrid-LAS ablations at n=16, mirroring the n=12 UPDATE exactly --
+table_mutation_ablation/table_hybrid_las_ablation and their fair-HV
+counterparts already took an n_qubits parameter, so this was mostly wiring
+(4 new table entries + 4 new figures in main()). One real fix needed along
+the way: _pooled_fair_hv_rows built each run's run_id with a hardcoded
+f-string that never included run_sweep.py's CIRCUIT_FIDELITY_SETTINGS
+suffix (e.g. "_statevector", "_es32_sh2048") -- silently correct at n=8/n=12
+(both <= fidelity_exact_threshold=13, where the suffix is never applied)
+but would have SILENTLY RETURNED EMPTY rows at n=16 for qaoa_maxcut/qft/
+w_state/hw_efficient_ansatz (only weak_random has no suffix at any size).
+Fixed by importing and reusing run_sweep.run_id_for/CIRCUIT_FIDELITY_
+SETTINGS directly instead of re-deriving the naming scheme a second time --
+verified by inspecting the resulting n=16 fair-HV tables (all 9
+mutation-scheme cells and all 6 hybrid-LAS cells populated with n_runs=25,
+none empty). Re-ran the full pytest suite after the change (19/19 pass) and
+confirmed fair_hv_hybrid_las_ablation_n16 reproduces the same structural
+False/True-identical property already verified at n=8/n=12 (a check on the
+new code path, not just the new data). sa-injection at n=16 is NOT wired
+into generate_report.py (same out-of-scope decision as
+table_injection_method_comparison, still n=8-only) -- this write-up's
+RESULT 3 numbers exist only here and in results_master.csv.
+
+Not done / open:
+- WHY fidelity_driven_greedy's win rate is non-monotonic in n (92-96% @
+  n=8 -> 16-28% @ n=12 -> 72-88% @ n=16) -- the single most important open
+  question from this pass; the candidate hypothesis above (a fidelity-
+  backend switch at n=13 for 3/5 families) is untested. This should be the
+  next thing investigated before drawing any hybrid-LAS or injection-
+  method conclusion that assumes a monotonic trend with n.
+- No ceiling-size algorithm-comparison table beyond what the mutation
+  ablation's own point/las0/stochastic cells already give (nsga2 0.0843 >
+  smsemoa 0.0724 > nsga3 0.0666, same nsga2>smsemoa>nsga3 ordering as
+  n=12) -- not cross-checked against each family's OWN higher ceiling
+  (qft/w_state/hw_efficient_ansatz go to n=20; this sweep used a uniform
+  n=16 for all 5 families instead, per the design choice already noted in
+  the PAUSED section above).
+- generate_report.py's injection_method_comparison table remains n=8-only;
+  the n=12 and n=16 sa-vs-stochastic comparisons exist only as hand-built
+  write-ups (this section and "SA-INJECTION EXTENDED TO n=12").
