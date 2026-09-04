@@ -3,6 +3,27 @@ Generated: 2026-08-18
 Last updated: 2026-09-04
 
 Recent activity (newest first; see the dated section below for full detail):
+- 2026-09-04: While investigating the n=16 non-monotonic greedy-pass
+  finding below, found and fixed two real, previously-undocumented bugs
+  in the injection stage: (1) stochastic_injection/sa_injection/fidelity_
+  driven_injection all hardcoded candidate gates to blocks[0]/blocks[1]
+  only, ignoring every other block pair -- unreachable connectivity for
+  any partition with >2 blocks (the norm above ~n=8); (2) extract_
+  interblock_gates miscounts full-width barrier() no-ops as "inter-block
+  gates" -- weak_random is the only circuit family that inserts them, and
+  for one real instance checked, 100% of its reported "20 inter-block
+  gates" were actually barriers (true count: 0). Quantified impact on one
+  seed: +526% fidelity_final at n=8, negligible at n=12/16 (where real
+  interblock connectivity for that seed was genuinely zero). Fidelity-
+  backend hypothesis for the n=16 finding was REJECTED along the way
+  (weak_random control showed the same reversal with no backend switch
+  involved). Given the impact, treated the entire existing results_
+  master.csv (1185 rows) as superseded: backed up runs/ (1186 dirs, 4.6GB)
+  to runs_backup_pre_injection_blockpair_fix/, fixed both bugs (pytest
+  19/19 still passing), and started re-running the core algorithm-
+  comparison baseline (225 configs) -- paused at user request after
+  122/225 (0 failed), to resume next session. See "INJECTION STAGE
+  BLOCK-PAIR COVERAGE FIX + BARRIER-MISCOUNTING FIX".
 - 2026-09-04: Resumed and completed the n=16 ceiling-size sweep paused
   2026-09-03 (211 new runs, 0 failed; results_master.csv now 1185 rows).
   Two findings hold at all 3 tested sizes (n=8/12/16): nsga2 keeps its
@@ -1320,3 +1341,180 @@ Not done / open:
 - generate_report.py's injection_method_comparison table remains n=8-only;
   the n=12 and n=16 sa-vs-stochastic comparisons exist only as hand-built
   write-ups (this section and "SA-INJECTION EXTENDED TO n=12").
+
+=====================================================================
+INJECTION STAGE BLOCK-PAIR COVERAGE FIX + BARRIER-MISCOUNTING FIX
+(2026-09-04) -- FULL RE-RUN IN PROGRESS, PAUSED MID-SWEEP
+=====================================================================
+Follow-up to the previous section's open item: investigated WHY
+fidelity_driven_injection's greedy-pass win rate is non-monotonic in n
+(92-96% @ n=8 -> 16-28% @ n=12 -> 72-88% @ n=16). Ended up finding two real,
+previously-undocumented bugs in the injection stage instead of resolving
+the original question -- both now fixed, and the fix's real-world impact is
+large enough that the entire existing results_master.csv (1185 rows, every
+run this project has ever recorded) is being treated as superseded.
+
+STEP 1 -- fidelity-backend hypothesis REJECTED: the leading candidate
+explanation (CIRCUIT_FIDELITY_SETTINGS' per-family backend/sample overrides
+only activate above fidelity_exact_threshold=13, i.e. between n=12 and
+n=16 for 3 of 5 families) was tested against weak_random as a control,
+since weak_random's CIRCUIT_FIDELITY_SETTINGS entry is empty (no override
+at any tested size). weak_random showed the IDENTICAL dip-then-recover
+pattern (80-100% @ n=8 -> 0% @ n=12 -> 40-80% @ n=16, per-algorithm) as the
+4 backend-switching families -- ruling out the fidelity backend as the
+cause.
+
+STEP 2 -- correction to an intermediate claim: n_kept_injections (in
+results_master.csv) was initially treated as an independent lead (it
+collapses to ~0 at n=12 for weak_random). Tracing the actual code
+(optimise_circuit_pipeline, "kept_injections_used = kept1 if fid_i > fid_inj
+else kept") showed this field is simply WHICHEVER path's kept-list won --
+i.e. it's a restatement of injection_path_used flipping, not an independent
+signal. Retracted as a lead; correctly identified as a symptom, not a
+cause.
+
+STEP 3 -- two real bugs found while digging into the actual mechanism:
+
+(a) BLOCK-PAIR COVERAGE BUG (the more consequential one): stochastic_
+injection, sa_injection (via _sa_generate_pool/_sa_rand_move), and
+fidelity_driven_injection ALL hardcoded candidate gates to be drawn only
+from blocks[0] and blocks[1] -- entirely ignoring every other block pair,
+regardless of how many blocks a partition actually has. This was never
+documented anywhere (checked CLAUDE.md/logs.txt/status.txt -- no mention).
+Partitions above ~n=8 routinely have >2 blocks (e.g. weak_random's mean
+block count runs 4.0 -> 7.6 -> 11.8 across n=8/12/16), so most inter-block
+reconnection opportunities were structurally unreachable by ANY injection
+strategy at scale -- a limitation of the whole injection stage, not
+specific to sa vs stochastic vs greedy.
+
+(b) BARRIER-MISCOUNTING BUG (weak_random-specific): extract_interblock_
+gates classifies a gate as "inter-block" if its qubits span >1 block.
+Qiskit's qc.barrier() with no explicit qubits touches ALL qubits by
+default, so it ALWAYS trivially "spans multiple blocks" for any partition
+with >1 block, regardless of whether any real entangling gate crosses a
+block boundary. weak_random_circuit is the only one of the 5 generators
+that calls .barrier() (after every depth layer) -- grep confirmed no other
+generator does. Concretely verified on one real instance (weak_random,
+n=8, seed=0): all 20 gates the pipeline reported as "inter-block gates
+extracted for later reinjection" were barriers; the ACTUAL real 2-qubit
+gate count crossing blocks was 0 (all 10 real cz gates were entirely
+intra-block -- Louvain had already found a perfect zero-cut partition for
+this instance). Barriers are unitary no-ops, so this bug never corrupted
+fidelity_final directly, but it did inflate every "N inter-block gates
+extracted" figure reported throughout this project's logs for weak_random,
+and wasted a reinjection pass on inert instructions.
+
+Both bugs found via direct code tracing plus minimal controlled repros
+(a 4-qubit toy circuit confirming extract_interblock_gates's barrier
+mislabeling; a Monte-Carlo check of stochastic_injection's accept-rate
+baseline; a real weak_random n=8/12/16 probe pinning down the actual
+mechanism) -- not by speculation. Neither bug explains the original
+non-monotonic win-rate question: (a) is a constant limitation at every n
+(not something that changes between n=12 and n=16 specifically), and (b)
+only affects weak_random, yet all 4 barrier-free families show the same
+reversal pattern. That original question remains OPEN -- see "Not done /
+open" below.
+
+QUANTIFIED IMPACT (before deciding whether to fix vs. just document):
+re-ran the exact same weak_random/nsga2/point/stochastic/seed=0 probe used
+to find the bugs, pre-fix vs. post-fix:
+  n    old fidelity_final   new fidelity_final   real interblock gates
+  8         0.0362               0.2265 (+526%)   2 (was reported as 20)
+  12        0.3494               0.3495 (+0.03%)  0 (was reported as 20)
+  16        0.3984               0.4004 (+0.5%)   0 (was reported as 20)
+At n=8, the fix let fidelity_driven_injection reach gates between
+previously-unreachable block pairs (e.g. cz(5,7), where qubit 5 lived in a
+THIRD block never reachable under the old blocks[0]/blocks[1]-only code) --
+a 6.3x fidelity swing for one seed. At n=12/16 the effect was negligible
+for this seed specifically because the real (post-barrier-fix) interblock
+gate count was genuinely zero -- nothing was there to recover regardless of
+which block pairs were reachable. Confirms the fix's impact is highly
+circuit/seed/partition-dependent, sometimes dramatic, and -- combined with
+finding (b) -- that this project's own "N inter-block gates extracted"
+statistics for weak_random were not measuring what they claimed to.
+
+DECISION (user, given this impact): fix now and accept re-running affected
+sweeps, rather than only documenting the limitation for later.
+
+FIX IMPLEMENTED (M1_finale/final_m1_script.py):
+- extract_interblock_gates: skip ci.operation.name == "barrier" before the
+  block-membership check.
+- New _rand_two_blocks(blocks, rng) helper: picks two DISTINCT blocks
+  uniformly at random from the full block list (verified via a 4-block
+  Monte-Carlo check -- all 12 ordered pairs hit roughly uniformly over
+  4000 draws).
+- stochastic_injection, fidelity_driven_injection, _sa_generate_pool, and
+  _sa_rand_move's "shift" move all now call _rand_two_blocks per
+  trial/candidate instead of hardcoding blocks[0]/blocks[1]. Updated the
+  fidelity_driven_injection docstring's stale "first two blocks" comment
+  to match.
+- This deliberately changes RNG stream consumption (and hence exact
+  reproducibility) even for circuits with exactly 2 blocks, not only
+  those with >2 -- a single shared mechanism was chosen over special-
+  casing the 2-block case, since introducing block-order randomization is
+  itself part of the fix (the old code always favored blocks[0] as q1's
+  source and blocks[1] as q2's, an arbitrary asymmetry worth removing too).
+- Verified: full pytest suite still 19/19 passing after the change.
+
+RE-RUN STARTED, THEN PAUSED (user request, same day, to resume next
+session): given the fix's impact, results_master.csv's entire 1185 rows
+(every run this project has ever recorded) predate it and are considered
+superseded -- moved the whole runs/ directory (1186 dirs, 4.6GB) to
+runs_backup_pre_injection_blockpair_fix/ (not deleted; added
+"runs_backup_*/" to .gitignore, since these backup dirs were previously
+untracked-but-not-ignored -- a latent risk of an accidental large commit).
+
+Scoped the re-run to the core algorithm-comparison baseline first (not the
+full historical dataset in one shot, given the Dec deadline and how much
+compute a full re-run of every ablation would cost): nsga2/smsemoa/nsga3,
+point mutation, no hybrid-LAS, stochastic injection, all 5 circuits at
+each family's own ceiling grid (weak_random/w_state/qft/hw_efficient_
+ansatz = [8,12,20], qaoa_maxcut = [8,12,16]), 5 seeds -- 225 configs
+(`python run_sweep.py --block-algorithms nsga2 smsemoa nsga3
+--injection-methods stochastic`). Mutation-scheme/hybrid-LAS/sa-injection
+ablations (at every size) remain to be re-run after this baseline lands.
+
+PAUSED (same day, user request): stopped after 122/225 configs complete,
+0 failed, via SIGTERM to the run_sweep.py process -- it has a proper
+signal handler (_handle_terminate) that kills the in-progress subprocess's
+whole process group (including joblib workers) before exiting, so this is
+the intended, safe way to interrupt it, not a raw kill. The one
+in-progress config at the moment of interruption
+(w_state_20q_stochastic_nsga2_point_las0_seed2) left no metrics.json (as
+designed -- run_sweep.py's resume check keys on metrics.json existing, not
+directory existence) and its partial output directory was removed as
+just-generated debris, matching the same handling as the earlier n=16
+ceiling-sweep pause. Remaining: 103 configs (w_state seeds 2-4 at n=20,
+plus all of qft and hw_efficient_ansatz at every size). Resume with the
+exact same command above -- the skip-if-metrics.json-exists logic picks up
+exactly where this left off.
+
+Not done / open:
+- The ORIGINAL question (why fidelity_driven_injection's win rate is
+  non-monotonic in n) is still unresolved -- neither bug found here
+  explains it (see STEP 3's note above). Once the re-run lands, this
+  should be re-checked on the FIXED codebase, since the old win-rate
+  numbers were measured on code with both bugs present and may not
+  reproduce the same pattern at all.
+- Core baseline re-run incomplete (122/225) -- no new fidelity_final/
+  algorithm-ranking conclusions should be drawn until it finishes.
+- Mutation-scheme, hybrid-LAS, and sa-injection ablations (at every size:
+  n=8/12/16) all still need re-running under the fixed code -- deliberately
+  deferred until the core baseline re-run is done and reviewed, per the
+  phased scope decision above.
+- The code fix (final_m1_script.py, .gitignore) has NOT been committed
+  yet -- deliberately held until the re-run produces real results to write
+  up alongside it, per this session's normal per-change commit pattern.
+- Not verified whether the fix's impact is systematically larger at
+  smaller n (fewer, bigger blocks -> a partition more likely to have
+  exactly 2 blocks, where the bug was a no-op) or at larger n (more blocks
+  -> more unreachable pairs, but also -- per finding (b) -- often less
+  real interblock connectivity to begin with) -- only one seed's worth of
+  before/after data exists so far (see QUANTIFIED IMPACT above); the full
+  225-run re-run will give a real distribution once it completes.
+- Whether the same "mostly barrier, no real interblock connectivity"
+  pattern found for weak_random n=12/16 seed=0 generalizes to other seeds,
+  or to the barrier-free families (whose "N inter-block gates extracted"
+  counts were never inflated to begin with, but whose TRUE interblock
+  counts are now unknown until their post-fix numbers are compared against
+  their own pre-fix "N inter-block gates extracted" prints) -- not checked.

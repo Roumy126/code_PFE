@@ -189,10 +189,19 @@ def plot_3d_clusters(pareto, n_clusters: int = 4, save_as: Optional[str] = None)
 def extract_interblock_gates(qc: QuantumCircuit, blocks: List[Set[int]]) -> List[Tuple]:
     """
     Extracts the gates that connect two distinct blocks.
+
+    Skips barrier instructions: a barrier's qargs span every qubit in the circuit by
+    default, so it always trivially "spans multiple blocks" for any partition with >1
+    block, regardless of whether any real entangling gate actually crosses a block
+    boundary -- weak_random_circuit is the only benchmark generator that inserts these
+    (after every depth layer), and without this filter every one of those no-op barriers
+    was being counted (and uselessly reinjected) as a genuine inter-block gate.
     """
     bmap = {q: i for i, bl in enumerate(blocks) for q in bl}
     interblock_gates = []
     for ci in qc.data:
+        if ci.operation.name == "barrier":
+            continue
         qargs = ci.qubits
         if len(qargs) < 2:
             continue
@@ -1577,6 +1586,22 @@ def _sa_energy(injections: Sequence[InjectionGate], *, base: QuantumCircuit, tar
     return α * n2q + β * depth + γ * crosstalk + δ * fid_penalty
 
 
+def _rand_two_blocks(blocks: List[Set[int]], rng: random.Random) -> Tuple[Set[int], Set[int]]:
+    """
+    Picks two DISTINCT blocks uniformly at random from `blocks`.
+
+    Generalizes what used to be a hardcoded blocks[0]/blocks[1] pair in every injection
+    function (stochastic_injection, sa_injection's pool/move generation,
+    fidelity_driven_injection) -- correct only when a partition happens to have exactly 2
+    blocks, but silently making every OTHER block pair unreachable to injection whenever
+    louvain_partition returns more than 2 (the common case above ~n=8: e.g. weak_random's
+    mean block count runs 4.0 -> 7.6 -> 11.8 across n=8/12/16). See logs.txt's "INJECTION
+    STAGE BLOCK-PAIR COVERAGE FIX" for how this was found and its impact.
+    """
+    i, j = rng.sample(range(len(blocks)), 2)
+    return blocks[i], blocks[j]
+
+
 def _sa_rand_move(injections: Sequence[InjectionGate], blocks: List[Set[int]], *, rng: random.Random,
                    eps_theta: float = 0.1) -> List[InjectionGate]:
     """
@@ -1594,7 +1619,7 @@ def _sa_rand_move(injections: Sequence[InjectionGate], blocks: List[Set[int]], *
         inj.gate = rng.choice([g for g in ("cx", "cz", "rzz") if g != inj.gate])
         inj.theta = None if inj.gate != "rzz" else rng.uniform(0, 2 * math.pi)
     elif choice == "shift":
-        blk0, blk1 = blocks[0], blocks[1]
+        blk0, blk1 = _rand_two_blocks(blocks, rng)
         inj.q1 = rng.choice(tuple(blk0))
         inj.q2 = rng.choice(tuple(blk1))
     elif choice == "tune_theta" and inj.gate == "rzz":
@@ -1606,11 +1631,12 @@ def _sa_rand_move(injections: Sequence[InjectionGate], blocks: List[Set[int]], *
 def _sa_generate_pool(blocks: List[Set[int]], gate_types: Sequence[str], *, rng: random.Random,
                       n_candidates: int) -> List[InjectionGate]:
     """
-    Creates an initial pool of (disabled) injections between two blocks.
+    Creates an initial pool of (disabled) injections, each between a fresh random pair of
+    blocks (see _rand_two_blocks) rather than a single fixed pair.
     """
-    blk0, blk1 = blocks[0], blocks[1]
     pool: List[InjectionGate] = []
     for _ in range(n_candidates):
+        blk0, blk1 = _rand_two_blocks(blocks, rng)
         gate = rng.choice(gate_types)
         q1 = rng.choice(tuple(blk0))
         q2 = rng.choice(tuple(blk1))
@@ -1722,9 +1748,10 @@ def stochastic_injection(qc: QuantumCircuit, blocks: List[Set[int]], *,
     kept: List[Tuple[str, int, int, Optional[float]]] = []
 
     for _ in range(n_injections):
+        blk0, blk1 = _rand_two_blocks(blocks, rng)
         gate = rng.choices(gate_types, probs, k=1)[0]
-        qi = rng.choice(tuple(blocks[0]))
-        qj = rng.choice(tuple(blocks[1]))
+        qi = rng.choice(tuple(blk0))
+        qj = rng.choice(tuple(blk1))
         theta = rng.uniform(0, 2 * math.pi) if gate == "rzz" else None
 
         G_loc = _local_gate_matrix(gate, theta)
@@ -1752,7 +1779,8 @@ def stochastic_injection(qc: QuantumCircuit, blocks: List[Set[int]], *,
 # - Inputs:
 #   - `base_qc`: starting circuit (without injections or partially injected),
 #   - `target_qc`: target circuit whose unitary we want to approach,
-#   - `blocks`: two (or more) qubit blocks (we draw 1 qubit from each of the first two blocks),
+#   - `blocks`: two (or more) qubit blocks (each trial draws 1 qubit from each of a fresh
+#     random pair of blocks, not always the same two -- see _rand_two_blocks),
 #   - `max_trials`: maximum number of trials,
 #   - `fid_threshold`: desired fidelity threshold.
 # - Outputs:
@@ -1955,9 +1983,10 @@ def fidelity_driven_injection(
         fid_old = safe_fidelity_between_circuits(candidate_qc, target_qc, **fid_kwargs)
 
     for _ in range(max_trials):
+        blk0, blk1 = _rand_two_blocks(blocks, rng)
         gate = rng.choice(gate_pool)
-        q1 = rng.choice(tuple(blocks[0]))
-        q2 = rng.choice(tuple(blocks[1]))
+        q1 = rng.choice(tuple(blk0))
+        q2 = rng.choice(tuple(blk1))
         theta = rng.uniform(0, 2 * math.pi) if gate == "rzz" else None
 
         if use_fast_path:

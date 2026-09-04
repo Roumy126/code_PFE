@@ -19,6 +19,15 @@ submission.
 =====================================================================
 WHERE WE ARE
 =====================================================================
+CAVEAT (2026-09-04, see item 7 below): two real bugs were just found and
+fixed in the injection stage (a block-pair coverage restriction, and a
+barrier-miscounting issue). Their impact is confirmed real and sometimes
+large (+526% fidelity_final on one tested seed). Every fidelity_final /
+algorithm-ranking / ablation finding below and in logs.txt predates this
+fix and should be treated as PROVISIONAL until the re-run (in progress,
+paused at 122/225 core-baseline configs) completes and is compared against
+it -- do not cite these numbers in the paper without re-checking first.
+
 - Pipeline works end-to-end (partition -> per-block GA optimize ->
   reassemble -> re-inject lost cross-block connections -> compress),
   with infrastructure to run it reliably and repeatably: a CLI
@@ -207,18 +216,42 @@ NEXT RESEARCH POINTS
    hold unchanged (74/75 bit-identical pairs; sa uniformly 18-24%
    slower) -- this axis is now the more stable of the two n=16 results,
    see item 7.
-7. OPEN, high priority (found 2026-09-04): fidelity_driven_injection's
-   greedy-pass win rate is NON-MONOTONIC in n -- 92-96% at n=8, drops to
-   16-28% at n=12, then SURGES BACK to 72-88% at n=16, for all 3
-   algorithms. Not root-caused. Candidate hypothesis, untested: qft/
-   w_state/hw_efficient_ansatz's per-family fidelity-backend settings
-   (CIRCUIT_FIDELITY_SETTINGS) only activate above n=13, i.e. exactly
-   between n=12 and n=16 for 3 of 5 circuit families -- could be shifting
-   which candidate's fidelity estimate reads higher, independent of
-   which is actually better. This undermines generalizing the n=12
-   hybrid-LAS mechanism ("greedy pass matters less as n grows") past
-   n=12 -- nsga2's hybrid-LAS benefit tracks the n=16 reversal, but
-   nsga3/smsemoa's doesn't, despite the same greedy-win-rate reversal in
-   their own numbers. Investigate before writing up any n-dependent
-   injection/hybrid-LAS claim for the paper. See logs.txt's "CEILING-SIZE
-   (n=16) SWEEP ... RESUMED, COMPLETED, AND ANALYZED".
+7. PARTIALLY RESOLVED, escalated (2026-09-04): investigated item 7's
+   non-monotonic greedy-pass win rate. The candidate hypothesis (a
+   per-family fidelity-backend switch at n=13) was REJECTED -- weak_random
+   (no such switch at any size) showed the identical reversal pattern as
+   the 4 backend-switching families. Instead found two real, previously-
+   undocumented bugs in the injection stage: (a) stochastic_injection/
+   sa_injection/fidelity_driven_injection all hardcoded candidate gates to
+   blocks[0]/blocks[1] only, silently unreachable for every other block
+   pair (the norm above ~n=8, where partitions routinely have >2 blocks);
+   (b) extract_interblock_gates miscounts weak_random's full-width
+   barrier() calls as "inter-block gates" (barriers touch all qubits, so
+   trivially span every block) -- one real instance checked had ALL 20
+   reported "inter-block gates" turn out to be barriers, true count 0.
+   Neither bug explains the ORIGINAL non-monotonic question (open below),
+   but their real-world impact (+526% fidelity_final on one n=8 seed,
+   negligible at n=12/16 for that same seed) means the entire existing
+   results_master.csv (1185 rows -- EVERY finding in items 2-6 above, and
+   everything in logs.txt since Phase 2) is now considered superseded
+   pending a re-run under the fix. Both bugs fixed same day (pytest
+   19/19 still passing); old runs/ backed up to runs_backup_
+   pre_injection_blockpair_fix/ (not deleted); a core algorithm-comparison
+   re-run (225 configs: nsga2/nsga3/smsemoa, point/las0/stochastic, all
+   5 circuits at ceiling sizes, 5 seeds) started, then PAUSED at 122/225
+   (0 failed) at user request -- resume with `python run_sweep.py
+   --block-algorithms nsga2 smsemoa nsga3 --injection-methods stochastic`
+   (skip-if-metrics.json-exists picks up exactly where it left off).
+   Mutation-scheme/hybrid-LAS/sa-injection ablations (all sizes) still
+   need re-running after the baseline lands. The code fix itself is NOT
+   yet committed. See logs.txt's "INJECTION STAGE BLOCK-PAIR COVERAGE FIX
+   + BARRIER-MISCOUNTING FIX".
+8. OPEN, still unresolved (carried over from item 7): WHY is fidelity_
+   driven_injection's greedy-pass win rate non-monotonic in n (92-96% @
+   n=8 -> 16-28% @ n=12 -> 72-88% @ n=16, for all 3 algorithms)? Item 7's
+   investigation ruled out the fidelity-backend hypothesis and found two
+   unrelated bugs instead, but did not explain THIS. Re-check once the
+   item-7 re-run lands -- the old win-rate numbers were measured on code
+   with both bugs present and may not even reproduce on the fixed
+   codebase. Do not generalize any n-dependent hybrid-LAS/injection-method
+   claim (including this session's own n=16 write-ups) until then.
