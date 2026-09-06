@@ -1,8 +1,36 @@
 PROJECT LOG — Quantum Circuit Optimization with Genetic Algorithms
 Generated: 2026-08-18
-Last updated: 2026-09-04
+Last updated: 2026-09-06
 
 Recent activity (newest first; see the dated section below for full detail):
+- 2026-09-06: Discussed scope for re-running the mutation-scheme/hybrid-LAS/
+  sa-injection ablations on the fixed injection code (900 new configs at
+  full scope, ~55-60h estimated) -- deferred the scope decision to next
+  session. Removed runs_backup_pre_injection_blockpair_fix/ (4.6GB) now that
+  its findings are fully written up below and the post-fix baseline is the
+  current source of truth. See "GREEDY-PASS WIN-RATE RE-CHECKED ON FIXED
+  INJECTION CODE"'s SCOPING DISCUSSION.
+- 2026-09-06: Resumed and completed the core algorithm-comparison baseline
+  re-run (paused 2026-09-04 at 122/225) -- 11 more configs run (all
+  hw_efficient_ansatz@20q), 214 skipped, 0 failed; results_master.csv
+  regenerated fresh (225 rows, only fixed-code data); pytest 19/19 still
+  passing. Re-checked the ORIGINAL open question the injection-stage bugs
+  were found while investigating -- whether fidelity_driven_injection's
+  greedy-pass win rate is non-monotonic in n -- on this fixed-code data.
+  Headline: the shape changed entirely, not just the numbers. Pre-fix, win
+  rate was high at n=8 (92-96%), collapsed at n=12 (16-28%), then partly
+  recovered at a uniform n=16 (72-88%). Post-fix, win rate is LOW at both
+  n=8 (24-40%) and n=12 (8-28%), then HIGH at each family's own ceiling
+  (qaoa_maxcut@16: 100%/5 seeds; the other 4 families@20: 65-70%) -- i.e.
+  now roughly monotonically increasing with n rather than dipping-then-
+  recovering. Root cause: mean block count at n=8 is already 4.0 for
+  qft/weak_random (only ~2.0-2.2 for the other 3 families) -- the
+  block-pair-coverage bug was already live at n=8 for those two families,
+  not only "above ~n=8" as the fix's own write-up assumed, so its removal
+  changed n=8's numbers just as much as n=12's. Confirms the fix
+  invalidated the entire pre-fix win-rate curve, not just its magnitude --
+  no pre-fix non-monotonicity conclusion survives. See "GREEDY-PASS
+  WIN-RATE RE-CHECKED ON FIXED INJECTION CODE" for full detail.
 - 2026-09-04: While investigating the n=16 non-monotonic greedy-pass
   finding below, found and fixed two real, previously-undocumented bugs
   in the injection stage: (1) stochastic_injection/sa_injection/fidelity_
@@ -1518,3 +1546,142 @@ Not done / open:
   counts were never inflated to begin with, but whose TRUE interblock
   counts are now unknown until their post-fix numbers are compared against
   their own pre-fix "N inter-block gates extracted" prints) -- not checked.
+
+=====================================================================
+GREEDY-PASS WIN-RATE RE-CHECKED ON FIXED INJECTION CODE (2026-09-06)
+=====================================================================
+Resumed the core baseline re-run paused mid-sweep in the previous section
+(122/225 at pause): re-ran `python run_sweep.py --block-algorithms nsga2
+smsemoa nsga3 --injection-methods stochastic`, which skipped the 214
+already-done configs and ran the 11 remaining (all hw_efficient_ansatz@20q:
+nsga2 seed4, all 5 seeds of nsga3 and smsemoa) -- 0 failed. Regenerated
+results_master.csv (225 rows, all on the fixed injection-stage code -- see
+previous section for the fix itself). pytest 19/19 still passing.
+
+With the full 225-row fixed-code baseline in hand, re-checked the ORIGINAL
+question that motivated finding the two injection-stage bugs: whether
+fidelity_driven_injection's greedy-pass win rate is non-monotonic in n.
+Win rate (fraction of runs where injection_path_used ==
+fidelity_driven_greedy), pooled across the circuits present at each size
+(this baseline uses each family's own ceiling grid, not a uniform size --
+qaoa_maxcut's ceiling is 16, the other 4 families' is 20; n=16 below is
+qaoa_maxcut only, n=20 is the other 4 families only):
+  block_algorithm   n=8    n=12   n=16(qaoa only)   n=20(4 families)
+  nsga2             40%    28%    100% (5 runs)     65% (20 runs)
+  nsga3             24%     8%    100% (5 runs)     65% (20 runs)
+  smsemoa           32%    16%    100% (5 runs)     70% (20 runs)
+
+Compare to the pre-fix numbers from the previous section (92-96% @ n=8,
+16-28% @ n=12, 72-88% @ a UNIFORM n=16 across all 5 families): the n=12
+numbers barely moved (still 8-28%), but n=8 COLLAPSED from 92-96% to
+24-40% -- i.e. the fix changed n=8 by roughly as much as it left n=12
+alone. The pre-fix "dip at n=12, partial recovery at n=16" shape is GONE;
+post-fix the shape looks like a roughly monotonic rise with n (low at
+8/12, high at each family's ceiling), not a dip-and-recover. No pre-fix
+non-monotonicity conclusion survives this recheck -- the entire curve was
+an artifact of the two now-fixed bugs, not a real property of the
+algorithm/injection-method interaction.
+
+ROOT CAUSE of why n=8 moved as much as n=12: checked mean n_blocks per
+circuit x n_qubits directly from results_master.csv:
+  circuit               n=8   n=12   n=16   n=20
+  hw_efficient_ansatz   2.2    3.0    --     4.6
+  qaoa_maxcut           2.0    3.0    3.4    --
+  qft                   4.0    6.0    --    10.0
+  w_state               2.2    3.0    --     4.6
+  weak_random           4.0    7.6    --    15.8
+qft and weak_random already average 4.0 blocks at n=8 -- the block-pair-
+coverage bug (hardcoded to blocks[0]/blocks[1]) was already fully live for
+those two families at the SMALLEST tested size, not only "above ~n=8" as
+the previous section's own bug writeup assumed (that framing came from
+weak_random's specific block-count curve, quoted there as "4.0 -> 7.6 ->
+11.8 across n=8/12/16" -- true for weak_random alone, but wrongly
+generalized to "partitions above ~n=8 routinely have >2 blocks" as if n=8
+itself were mostly exempt). The other 3 families do average close to
+exactly 2 blocks at n=8 (2.0-2.2), so for THOSE families the coverage bug
+proper was closer to a no-op there -- but the fix also changes block-order
+RNG consumption even in the exactly-2-block case (a deliberate side effect
+of the fix, noted in the previous section), so their n=8 numbers moved too
+(e.g. nsga2 w_state n=8: 60% win rate post-fix; qaoa_maxcut n=8 dropped to
+20% across all 3 algorithms). Net effect: don't assume any pre-fix
+per-family qubit-size threshold for when the bugs "started mattering" --
+empirically all 5 families' n=8 numbers moved.
+
+Per-circuit breakdown (win rate, 5 runs/cell) confirms the drop is broad,
+not confined to weak_random/qft (the block-count outliers) or to weak_random
+(the barrier-bug family):
+  n=8:  nsga2   hw_efficient_ansatz 40%, qaoa_maxcut 20%, qft 20%, w_state
+        60%, weak_random 60%
+  n=12: nsga2   hw_efficient_ansatz 40%, qaoa_maxcut 20%, qft  0%, w_state
+        60%, weak_random 20%
+(nsga3/smsemoa show the same broad, uneven-but-universal drop -- see
+results_master.csv for the full table; not reproduced here for space.)
+
+weak_random's n_kept_injections (now meaningful post-barrier-fix, since it
+no longer counts inert barriers) confirms the earlier single-seed finding
+generalizes across seeds: mean 2.93 real kept injections at n=8, dropping
+to 0.33 at n=12 and 0.40 at n=20 -- real interblock connectivity for
+weak_random is genuinely much sparser above n=8, consistent with (but not
+the same mechanism as) the n=12/16 single-seed check in the previous
+section.
+
+fidelity_final means (pooled across circuits, fixed code), for reference
+against pre-fix values elsewhere in this file -- NOT directly comparable
+to any earlier table since every prior fidelity_final in this log predates
+both bugs' fixes:
+  block_algorithm   n=8      n=12     n=16(qaoa)  n=20(4 fam.)
+  nsga2             0.1349   0.1066   0.0293      0.1040
+  nsga3             0.1201   0.0833   0.0144      0.0879
+  smsemoa           0.1080   0.0944   0.0093      0.0907
+nsga2 > nsga3/smsemoa ordering at n=8/12/20 matches the pre-fix ranking's
+general shape (nsga2 highest), but absolute numbers and the nsga3-vs-
+smsemoa runner-up order are not meaningfully comparable to pre-fix tables
+without re-deriving them on this same fixed-code data -- treat every
+fidelity_final number in this file dated before 2026-09-04's fix as
+describing the OLD, buggy injection stage, not the current pipeline.
+
+Not done / open:
+- Only 5 seeds/cell and an uneven size grid (n=16 has only qaoa_maxcut's 5
+  runs, n=20 only the other 4 families' 20) -- the "roughly monotonic rise"
+  read on the post-fix curve is suggestive, not confirmed at matched
+  sample sizes across all cells the way n=8/n=12 are.
+- No uniform-n=16-across-all-5-families data point exists yet on the fixed
+  code (the pre-fix uniform-n=16 ceiling sweep is entirely superseded) --
+  can't yet directly compare "does the fixed code still show a dip-then-
+  recover shape when size is held identical across families" the same way
+  the pre-fix analysis could. Would need a dedicated n=16 sweep for the
+  4 non-qaoa families to check.
+- Mutation-scheme, hybrid-LAS, and sa-injection ablations still need
+  re-running on the fixed code at every size (n=8/12/ceiling) -- deferred,
+  per the previous section's phased plan; the greedy-win-rate mechanism
+  those ablations' n=12 root-cause analysis relied on (see "MUTATION-SCHEME
+  AND HYBRID-LAS ABLATIONS EXTENDED TO n=12"'s ROOT CAUSE paragraph) should
+  be re-derived on fixed-code ablation data before trusting hybrid-LAS
+  conclusions built on the old win-rate numbers.
+- The fix (final_m1_script.py, .gitignore) was already committed earlier the
+  same day (commit e766aecf, before this section's re-run/analysis) --
+  correcting this file's own prior "still uncommitted" note.
+
+SCOPING DISCUSSION (same day): asked the user how much of the mutation-
+scheme/hybrid-LAS/sa-injection re-run to kick off next. Full re-run at every
+size (n=8/12/ceiling, all 3 phases) is 900 new configs; using this machine's
+measured per-size averages from the fresh 225-run baseline (28s @ n=8, 95s @
+n=12, 624s @ n=20 -- n=20 alone dominates), that's an estimated ~55-60 hours
+of sequential wall-clock time (run_sweep.py launches one subprocess at a
+time; each subprocess uses all cores internally via joblib(-1), so sweeps
+don't parallelize across configs). Options discussed: n=8+n=12 only now
+(~450 new runs, ~10-11h, ceiling deferred), full re-run in the background
+across pause/resume cycles (~900 runs, ~55-60h), or one phase at a time
+(mutation-scheme ablation alone first, ~450 new runs across all sizes,
+~26h). DECISION: paused here, to be decided and started next session --
+runs_backup_pre_injection_blockpair_fix/ (4.6GB, the full pre-fix runs/
+snapshot from the previous section) was removed from disk same day per user
+request, now that the fix's impact is fully documented in this file and the
+post-fix baseline (225 rows) is the current source of truth; nothing in the
+current runs/ tree depends on it.
+
+Not done / open:
+- Which scope to run next (n=8+12 only / full n=8-ceiling / one phase at a
+  time) -- not decided yet, to be picked up next session.
+- Everything else already listed above (uniform-n=16 comparison, ablations
+  re-run on fixed code) remains open.
